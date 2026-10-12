@@ -1,0 +1,33 @@
+# Local development only: mirrors the range (PostgreSQL 16, non-root app, resource caps).
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: payments
+      POSTGRES_PASSWORD: payments
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payments"]
+      interval: 5s
+      retries: 10
+    mem_limit: 1g
+
+  app:
+    build: .
+    platform: linux/amd64
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/payments
+      SPRING_DATASOURCE_USERNAME: payments
+      SPRING_DATASOURCE_PASSWORD: payments
+    ports:
+      - "8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cpus: 2
+    mem_limit: 2g
