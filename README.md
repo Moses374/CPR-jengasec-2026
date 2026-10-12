@@ -84,13 +84,21 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 ## Team
 
-| Role | Owner | Area |
+| Member | Role | Owns |
 |---|---|---|
-| A – Captain, Ops | | Pipeline, submission, freeze |
-| B – Identity and access | | Auth, roles, authorisation checks |
-| C – Payments core | | Ledger, transfers, fraud, maker-checker |
-| D – Security lead | | Proposal, threat model, review, testing |
+| **Moses** | Captain, Ops + controls | Pipeline and submission, freeze, fraud allow/review/block, end-of-day reconciliation |
+| **Kathy** | Builder: access and approval | Authentication, roles, ownership checks, lockout and rate limits, maker-checker |
+| **Adam** | Builder: ledger core | Double-entry ledger, atomic transfers, idempotency, limits, reversals, seed data |
+| **Ethan** | Security specialist | Proposal lead, threat model, append-only log, code review, testing our own service |
 
-Rule: no security-critical change merges without D's review.
+Tasks are GitHub issues, one owner each. Design decisions live in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+### How we work
+
+- Branch per task: `kathy/auth`, `adam/ledger`, ... Open a pull request into `main`; never push straight to `main`.
+- **Ethan reviews every security-critical pull request before it merges.**
+- `main` must always build and pass `pytest`. Moses ships images from `main` only.
+- Check in every 4–6 hours: done, blocked, next.
+- Moses owns the freeze: when he says stop, everyone stops.
 
 The proposal's threat model, architecture and security design are written by the team, not AI tools (competition rule). See `docs/JengaSec-2026-Team-Game-Plan.pdf`.
