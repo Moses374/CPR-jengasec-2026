@@ -101,4 +101,4 @@ Tasks are GitHub issues, one owner each. Design decisions live in [`docs/DECISIO
 - Check in every 4–6 hours: done, blocked, next.
 - Moses owns the freeze: when he says stop, everyone stops.
 
-The proposal's threat model, architecture and security design are written by the team, not AI tools (competition rule). See `docs/JengaSec-2026-Team-Game-Plan.pdf`.
+
