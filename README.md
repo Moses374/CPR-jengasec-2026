@@ -82,6 +82,9 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 - Exact environment variable names for the PostgreSQL connection (`app/config.py` accepts `DATABASE_URL` or `PG*`).
 - Does the database count toward our 3 GB?
 - Which of Blue Team Documentation, Report and Supporting Evidence are required, and can a filing be replaced?
+- Do Red teams or judges get credentials from us? If yes, customer accounts only: which ones?
+- Does the platform database persist across image submissions, or start fresh each time?
+- Can we reset the platform database before the freeze if test data gets in by accident?
 
 ## Team
 

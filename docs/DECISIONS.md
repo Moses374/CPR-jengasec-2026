@@ -49,7 +49,7 @@ Status per question: `open` → `agreed`.
 - `ledger_transaction_id UNIQUE` and `CHECK ((status='posted') = (ledger_transaction_id IS NOT NULL))`.
 - Deferred trigger: every `kind='transfer'` ledger transaction has exactly one posted request (no money moves without passing maker-checker and fraud).
 - Deferred trigger: a posted request's ledger transaction has exactly two entries, `−amount` on `from_account_id` and `+amount` on `to_account_id`.
-- After seeding, a trigger rejects any new `kind='opening'` transaction. Reversals (Adam) follow the same match-a-record pattern.
+- At the end of the seed migration, a trigger is created that rejects any new `kind='opening'` transaction. Reversals (Adam) follow the same match-a-record pattern.
 
 **An approval covers exactly what the checker saw**
 1. Trigger: `id, maker_id, from_account_id, to_account_id, amount, memo, created_at` are immutable; no DELETE or TRUNCATE.
@@ -93,6 +93,16 @@ Status per question: `open` → `agreed`.
 - Flooding an account with tiny entries to slow its balance down is limited by: minimum transfer 1.00 KES (request model + `CHECK (amount >= 100)` on `transfer_requests`, to confirm with Adam), rate limits (Kathy) and daily caps (Adam), and the 3s lock timeout. A test seeds 200,000 entries on one account and asserts an Index Only Scan under 50 ms.
 - Balance and history endpoints are scoped to the owner (404 otherwise). System account balances are hidden from customers; only an auditor/admin role sees them.
 - Whole-ledger `SUM(entries) = 0` is checked by reconciliation and logged as part of the anchor outside the DB.
+
+**Q5 Seed data: `agreed`**
+- Migration order: `0002` ledger schema (Moses) → auth (Kathy) → audit log (Ethan) → idempotency/fraud/recon (Adam) → **seed last** (Moses). The seed needs Kathy's hash format and roles and Ethan's audit records, so it runs after everyone's schema.
+- One system account, `JengaBank Funding`, source of every opening balance; hidden from customers.
+- Customers (fictional names only), each there to exercise a control: Amina Wekesa (current 2,500,000.00 + savings 800,000.00: maker-checker, own-account transfers); Brian Otieno (150,000.00: ordinary recipient); Cynthia Mwangi (5,000.00: insufficient funds, rapid drain); David Kiprop (new account, 0.00: new-account fraud signal); Esther Njeri (frozen, 20,000.00: frozen accounts cannot send).
+- Staff: 1 teller/operator, 2 approvers (checker ≠ maker, double-approval race), 1 auditor, 1 admin. Role names from Kathy.
+- About 30 posted transfers spread over the 14 days before the migration runs, so fraud has a baseline. Every seeded transfer goes through the full path (request, ledger transaction, 2 entries, audit record), so our own triggers check the seed. No pending requests (they would expire before the event days).
+- Credentials: random 20+ character password per seed user, generated once locally; only argon2 hashes (Kathy's parameters) go in the migration; plaintext lives in the team password manager, never in the repo or logs; staff credentials are never shared outside the team.
+- Fixed UUID literals generated once with `uuid4()`; never patterned ids. Names only, no real personal data. Tests create their own data and never depend on seed balances.
+- No transfers against the platform deployment before the freeze (the DB is snapshotted at freeze and restored each event day); test locally with `docker compose`.
 
 ## Kathy (with Moses on maker-checker): access and approval
 
