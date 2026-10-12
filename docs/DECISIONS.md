@@ -31,7 +31,7 @@ Status per question: `open` → `agreed`.
 - One `to_cents()` / `from_cents()` pair in `app/ledger.py`. Inside the app every amount, limit and threshold is an `int` in cents (e.g. `APPROVAL_THRESHOLD_CENTS`). Kathy and Adam use the same unit, so no threshold can be bypassed by a unit mismatch.
 - Single currency: `currency CHAR(3) CHECK (currency = 'KES')` on accounts. DB backstop on entries: `amount <> 0 AND abs(amount) <= 1000000000000`.
 
-**Q1 Tables: `agreed` (shared columns of `transfer_requests` to confirm with Kathy and Adam)**
+**Q1 Tables: `agreed`** (shared columns of `transfer_requests` still to confirm with Kathy and Adam)
 - `accounts` (UUID ids, `owner_id` NULL only for system accounts, `min_balance`, `status`; **no balance column**), `ledger_transactions` (kind, `reverses_id UNIQUE`), `entries` (signed `BIGINT amount`, `UNIQUE (transaction_id, account_id)`).
 - Ledger holds only posted money and is immutable: triggers reject `UPDATE`, `DELETE`, `TRUNCATE` (same trigger function as the audit log, with Ethan).
 - Every transfer creates a row in a separate `transfer_requests` table (workflow state). The ledger only ever holds posted money.
@@ -66,6 +66,24 @@ Status per question: `open` → `agreed`.
 - Indexes: `entries(transaction_id)`, `entries(account_id) INCLUDE (amount)`, partial index on open requests by `from_account_id`.
 - Owner/superuser bypass: (1) if the platform allows `CREATEROLE`, money tables are owned by a `NOLOGIN` role and the app user gets only the grants it needs; (2) no string-built SQL anywhere (unparameterised `text()` allows stacked statements), enforced by a test and review; (3) startup and reconciliation verify all triggers exist and are enabled (`ledger.controls_disabled`); (4) reconciliation logs ledger totals and the audit chain head to platform logs, an anchor outside the DB.
 - Known residual risk (stated in the proposal): a superuser can change data; we cannot prevent that, but we detect it at the next reconciliation and prove it from the logs held outside the DB.
+
+**Q3 Concurrency: `agreed`**
+- Mechanism: row locks. Not SERIALIZABLE (contention causes abort storms an attacker can trigger on purpose) and not advisory locks (not tied to rows, easy to get wrong).
+- Isolation pinned to READ COMMITTED on the engine (each statement sees what the previous lock holder committed), with a test that asserts it.
+- `SELECT … FOR NO KEY UPDATE`, not `FOR UPDATE`: does not conflict with the foreign-key checks Postgres runs on insert, so crossed transfers cannot deadlock through them.
+- Lock only accounts being **debited**, sorted by id, via one helper `ledger.lock_accounts(db, ids)`. Credits only raise a balance, so this stays correct, and nobody can stall a victim's account by flooding transfers into it.
+- One lock order for every money path:
+  1. idempotency key row (Adam, `INSERT … ON CONFLICT`)
+  2. the `transfer_requests` row, `FOR UPDATE`, when acting on an existing request (approve, reject, expire)
+  3. debited accounts (`lock_accounts`)
+  4. checks: balance, holds, limits, fraud, all after the locks
+  5. inserts
+  6. `SET CONSTRAINTS ALL IMMEDIATE`
+  7. audit log row (Ethan): always last, held briefly
+  8. commit
+- DB overdraft backstop: deferred constraint trigger on each debit entry locks the account and checks `SUM(entries) >= min_balance`, so even a path that forgot to lock cannot overdraw. App locks protect holds and give clean errors (`422`, `transfer.insufficient_funds`).
+- Fail fast: `lock_timeout` 3s → 503 + `Retry-After` (`ledger.lock_timeout`); `statement_timeout` 10s; pool timeout 5s; deadlock retried once after full rollback, then 503 (`ledger.deadlock`).
+- Proof tests (real Postgres, threads released together): 50 parallel transfers with funds for 10 → exactly 10 succeed; crossed A→B / B→A without deadlock; 20 parallel approvals → one posts; approve vs reject → one wins; parallel holds never exceed available funds; the backstop trigger alone prevents overdraft; isolation level asserted.
 
 ## Kathy (with Moses on maker-checker): access and approval
 
