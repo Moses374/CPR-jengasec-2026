@@ -1,9 +1,14 @@
-target/
-docs/
 .git/
+docs/
+tests/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
 .idea/
 .vscode/
-*.iml
 *.md
 docker-compose.yml
+requirements-dev.txt
 .env

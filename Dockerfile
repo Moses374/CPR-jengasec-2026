@@ -1,22 +1,24 @@
 # syntax=docker/dockerfile:1
 # Build:  docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:v1 .
 
-FROM maven:3.9-eclipse-temurin-21 AS build
-WORKDIR /src
-COPY pom.xml .
-RUN mvn -B -q dependency:go-offline
-COPY src ./src
-RUN mvn -B -q -DskipTests package
+FROM python:3.12-slim AS build
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-FROM eclipse-temurin:21-jre-alpine
-RUN addgroup -S app && adduser -S -G app -H -s /sbin/nologin app
-WORKDIR /app
-COPY --from=build --chown=app:app /src/target/app.jar /app/app.jar
+FROM python:3.12-slim
+RUN groupadd --system app && useradd --system --gid app --no-create-home --shell /usr/sbin/nologin app
+COPY --from=build /install /usr/local
+WORKDIR /srv
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root migrations ./migrations
+COPY --chown=root:root app ./app
 
-# 2 CPU / 3 GB is shared with the database: keep the JVM well inside its share and
-# exit (so the platform restarts it) rather than limp on after an OutOfMemoryError.
-ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=50 -XX:+ExitOnOutOfMemoryError -Djava.io.tmpdir=/tmp"
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=8080 \
+    WEB_CONCURRENCY=2
 
 USER app
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+CMD ["python", "-m", "app.run"]

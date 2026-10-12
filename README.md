@@ -1,6 +1,6 @@
 # CPR – JengaBank APP04 Payment Processing Service
 
-JengaSec 2026, Application Blue track. Java 21 · Spring Boot 3.5 · PostgreSQL 16.
+JengaSec 2026, Application Blue track. Python 3.12 · FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL 16.
 
 > **Private repository.** Never make this repo or its container image public: Red teams would study it before the event, and public images are rejected.
 
@@ -20,31 +20,43 @@ The platform plumbing only. The ledger, transfer, fraud and maker-checker design
 | Requirement | Where |
 |---|---|
 | linux/amd64, non-root, one port (8080) | `Dockerfile` |
-| `/healthz`, `/readyz` | `health/HealthController` |
-| `/openapi.json` | springdoc, `application.properties` |
-| One JSON log line per request (`ts, src_ip, method, path, status, user, action`) | `observability/RequestLogFilter` |
-| Tables and seed data created on startup | Flyway, `src/main/resources/db/migration` |
-| No internet at runtime | All dependencies are in the jar |
-| Deny by default, no stack traces in errors | `config/SecurityConfig`, `application.properties` |
+| `/healthz`, `/readyz` (DB check), `/openapi.json` | `app/main.py` |
+| One JSON log line per request (`ts, src_ip, method, path, status, user, action`) | `app/observability.py` |
+| All other logs are JSON too | `app/observability.py` (`LOGGING`) |
+| Tables and seed data created on startup | Alembic, run by `app/run.py` before the server starts |
+| No internet at runtime | All packages installed in the image |
+| No docs UI, no server header, no input echoed in 422 errors, security headers | `app/main.py`, `app/run.py` |
 
 ### Logging security events
 
 Every request is logged automatically. Name the outcome wherever it is decided:
 
-```java
-AuditContext.user(userId);            // once authentication succeeds
-AuditContext.action("transfer.denied");
+```python
+from app import observability as audit
+
+audit.user(user_id)               # once authentication succeeds
+audit.action("transfer.denied")
 ```
 
 Without an explicit action, the filter falls back to `http.request`, `authz.denied`, `input.rejected` and similar, based on the status code. Never log passwords, tokens or full secrets.
 
 ### Database changes
 
-Add a new file `V2__describe_change.sql`, `V3__...` in `db/migration`. **Never edit a migration that has already been pushed.** Seed data (made-up only) goes in migrations too.
+Add a new revision in `migrations/versions/` (`0002_...py`, `0003_...py`, each with `down_revision` pointing at the previous one). **Never edit a migration that has already been pushed.** Seed data (made-up only) goes in migrations too.
+
+Money paths use the synchronous `get_db` session (`app/db.py`): one request, one thread, one transaction.
 
 ## Run locally
 
-Needs Docker Desktop running.
+Tests (no database needed):
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-dev.txt
+.venv/Scripts/python -m pytest
+```
+
+Full stack (needs Docker Desktop running):
 
 ```bash
 docker compose up --build
@@ -66,8 +78,8 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 ### Open questions for the organisers
 
-- Exact environment variable names for the PostgreSQL connection (currently `SPRING_DATASOURCE_*`).
-- Does the database count toward our 3 GB? (The JVM is capped at 50% of container memory.)
+- Exact environment variable names for the PostgreSQL connection (`app/config.py` accepts `DATABASE_URL` or `PG*`).
+- Does the database count toward our 3 GB?
 - How are proposals and the 14:00 build freeze sequenced?
 
 ## Team

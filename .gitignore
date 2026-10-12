@@ -1,7 +1,10 @@
-target/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
 .idea/
 .vscode/
-*.iml
 .DS_Store
 .env
 *.log

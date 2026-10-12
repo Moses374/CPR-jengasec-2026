@@ -21,9 +21,10 @@ services:
       db:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/payments
-      SPRING_DATASOURCE_USERNAME: payments
-      SPRING_DATASOURCE_PASSWORD: payments
+      PGHOST: db
+      PGUSER: payments
+      PGPASSWORD: payments
+      PGDATABASE: payments
     ports:
       - "8080:8080"
     read_only: true
