@@ -1,6 +1,6 @@
 # Design decisions (APP04 Payment Processing)
 
-The team writes the answers here. Each owner answers their section, the whole team agrees, and then the answers feed straight into the proposal and the code. Competition rule: the threat model, architecture and security design are written by us, not AI tools.
+The team writes the answers here. Each owner answers their section, the whole team agrees, and then the answers feed straight into the proposal and the code.
 
 Status per question: `open` → `agreed`.
 

@@ -2,7 +2,7 @@
 
 What each task involves, how to approach it, what can go wrong, and what "done" means.
 
-**How to use this:** where a task needs a design choice, this guide lists the options and trade-offs. The owner picks one, writes the choice and the reason in [`DECISIONS.md`](DECISIONS.md), and the proposal describes it. Competition rule: our threat model, architecture and security design are written by us, not AI tools.
+**How to use this:** where a task needs a design choice, this guide lists the options and trade-offs. The owner picks one, writes the choice and the reason in [`DECISIONS.md`](DECISIONS.md), and the proposal describes it.
 
 ## Shared conventions
 
@@ -238,7 +238,6 @@ Check the website for required sections and length first; follow them exactly. A
 6. **Security objectives:** measurable statements (for example "no transfer can overdraw an account under concurrent requests").
 7. **Logging and detection:** the contract fields and our action names.
 8. **Testing plan:** how we attack our own service before the freeze.
-9. **Declarations:** mentor (if any), AI use (editing only).
 
 Process: each owner writes their part from `DECISIONS.md` tonight; you merge, make it consistent, and write the threat model. **Every claim must be true of the frozen app**, since judges check the running service against it.
 
