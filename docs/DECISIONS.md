@@ -23,6 +23,50 @@ Status per question: `open` → `agreed`.
 5. What seed data (made-up) do we ship: accounts, users, opening balances?
 6. Platform: which database settings does JengaSec inject? Exact freeze time on our team page?
 
+### Answers
+
+**Q4 Amounts: `agreed`**
+- Stored as `BIGINT` minor units (KES cents). Never floats, never `NUMERIC` (Postgres silently rounds extra decimals on insert).
+- API takes and returns amounts as JSON strings with exactly 2 decimals: `^(0|[1-9][0-9]{0,9})\.[0-9]{2}$`. Anything else is rejected with 422; we reject, we never round.
+- One `to_cents()` / `from_cents()` pair in `app/ledger.py`. Inside the app every amount, limit and threshold is an `int` in cents (e.g. `APPROVAL_THRESHOLD_CENTS`). Kathy and Adam use the same unit, so no threshold can be bypassed by a unit mismatch.
+- Single currency: `currency CHAR(3) CHECK (currency = 'KES')` on accounts. DB backstop on entries: `amount <> 0 AND abs(amount) <= 1000000000000`.
+
+**Q1 Tables: `agreed` (shared columns of `transfer_requests` to confirm with Kathy and Adam)**
+- `accounts` (UUID ids, `owner_id` NULL only for system accounts, `min_balance`, `status`; **no balance column**), `ledger_transactions` (kind, `reverses_id UNIQUE`), `entries` (signed `BIGINT amount`, `UNIQUE (transaction_id, account_id)`).
+- Ledger holds only posted money and is immutable: triggers reject `UPDATE`, `DELETE`, `TRUNCATE` (same trigger function as the audit log, with Ethan).
+- Every transfer creates a row in a separate `transfer_requests` table (workflow state). The ledger only ever holds posted money.
+- No API endpoint can debit a system account; only seed migrations and reversals post to them.
+- Moses creates a minimal `users(id, username, created_at)` in `0002`; Kathy extends it with auth columns in her own revision.
+
+**Pending transfers reserve funds (derived holds, no stored field)**
+- `available = SUM(entries) − SUM(open requests from the account)`, where open = `status IN ('pending_approval','held_review') AND expires_at > now()`.
+- Request creation locks the source account and checks `available`. Posting re-checks funds and limits under lock.
+- Expiry is automatic in the calculation (no scheduler, works with 2 workers); every transition out of a pending state also requires `expires_at > now()`. DB clock only.
+- Max 5 open requests per source account.
+- View `account_activity` = posted entries UNION open holds, for history.
+
+**Request and ledger can never disagree (DB-enforced)**
+- `ledger_transaction_id UNIQUE` and `CHECK ((status='posted') = (ledger_transaction_id IS NOT NULL))`.
+- Deferred trigger: every `kind='transfer'` ledger transaction has exactly one posted request (no money moves without passing maker-checker and fraud).
+- Deferred trigger: a posted request's ledger transaction has exactly two entries, `−amount` on `from_account_id` and `+amount` on `to_account_id`.
+- After seeding, a trigger rejects any new `kind='opening'` transaction. Reversals (Adam) follow the same match-a-record pattern.
+
+**An approval covers exactly what the checker saw**
+1. Trigger: `id, maker_id, from_account_id, to_account_id, amount, memo, created_at` are immutable; no DELETE or TRUNCATE.
+2. Trigger enforces the state machine: `held_review → pending_approval | posted | blocked | expired`; `pending_approval → posted | rejected | expired | failed`; terminal states final; `posted` from `pending_approval` requires `checker_id`.
+3. Approval and posting are one DB transaction (no "approved, not yet posted" state). Failure at that point → `failed` with a reason, hold released.
+4. Posting reads the amount only from the locked request row. The approval body is `request_id` + `expected_amount`; a mismatch returns 409 (`approval.mismatch`).
+5. `CHECK (checker_id <> maker_id)`; checker role verified in code and by trigger; double approval closed by a conditional `UPDATE` that must change exactly 1 row.
+6. The audit log records amount and accounts at creation and approval; reconciliation checks posted entries against it.
+
+**Double entry: DB trigger prevents, reconciliation detects**
+- Deferred constraint triggers: each transaction's entries sum to zero, and each transaction has at least 2 entries.
+- The posting function runs `SET CONSTRAINTS ALL IMMEDIATE` after inserting, so violations surface there; caught, rolled back, logged `ledger.invariant_violation`, client gets a generic 500.
+- Every trigger has a test that proves it fires. DB tests run in GitHub Actions with a Postgres service and are required on every PR (they must not silently skip).
+- Indexes: `entries(transaction_id)`, `entries(account_id) INCLUDE (amount)`, partial index on open requests by `from_account_id`.
+- Owner/superuser bypass: (1) if the platform allows `CREATEROLE`, money tables are owned by a `NOLOGIN` role and the app user gets only the grants it needs; (2) no string-built SQL anywhere (unparameterised `text()` allows stacked statements), enforced by a test and review; (3) startup and reconciliation verify all triggers exist and are enabled (`ledger.controls_disabled`); (4) reconciliation logs ledger totals and the audit chain head to platform logs, an anchor outside the DB.
+- Known residual risk (stated in the proposal): a superuser can change data; we cannot prevent that, but we detect it at the next reconciliation and prove it from the logs held outside the DB.
+
 ## Kathy (with Moses on maker-checker): access and approval
 
 1. What roles exist and what can each one do?
