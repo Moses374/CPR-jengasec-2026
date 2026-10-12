@@ -10,7 +10,8 @@ JengaSec 2026, Application Blue track. Python 3.12 · FastAPI · SQLAlchemy 2 ·
 |---|---|
 | Mon 12 Oct, 23:59 | Every member: profile, ID, Code of Conduct complete |
 | **Tue 13 Oct, 12:00** | **Proposal due** (also registration closes) |
-| Tue 13 Oct, 14:00 | Build freeze: last Healthy image is locked (check the team page for our exact time) |
+| **Tue 13 Oct, 13:00** | **Build freeze: last Healthy image is locked** (confirmed on our team page) |
+| Tue 13 Oct, 14:00 | Other documents close (Blue Team Documentation, Report, Supporting Evidence) |
 | 14–16 Oct | Live event at Strathmore |
 
 ## What is already here
@@ -80,7 +81,7 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 - Exact environment variable names for the PostgreSQL connection (`app/config.py` accepts `DATABASE_URL` or `PG*`).
 - Does the database count toward our 3 GB?
-- How are proposals and the 14:00 build freeze sequenced?
+- Which of Blue Team Documentation, Report and Supporting Evidence are required, and can a filing be replaced?
 
 ## Team
 

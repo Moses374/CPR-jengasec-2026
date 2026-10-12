@@ -70,7 +70,7 @@ The point is to hit token, platform and port problems now, with a trivial app, n
    ```
 3. **Visibility:** GitHub → your profile → Packages → `cpr-jengasec-2026` → Package settings → confirm **Private**. Link it to the repo (same page) so teammates can see it.
 4. **Form token:** a second classic token with **only `read:packages`**. This one goes into the submission form.
-5. **Team page → Submit application:** image `ghcr.io/moses374/cpr-jengasec-2026:v1`, username `Moses374`, the read-only token, port `8080`, health path `/healthz`, database **yes**.
+5. **Team page → Submit application:** image `ghcr.io/moses374/cpr-jengasec-2026:v1`, registry username **`Moses374`** (the form pre-fills the JengaSec username; replace it with the GitHub account that owns the image), port `8080`, health path `/healthz`, tick **Needs a database**, the read-only token. Environment variables are for non-secret settings only.
 6. Watch it go Pulled → Scanned → Deployed → **Healthy**. Read the scan report and the app logs on the page.
 7. **Find the database settings.** The logs show whether migrations ran. If they failed, the platform is using different variable names than `DATABASE_URL` / `PG*`; the Image Submission Guide should list them. Update `app/config.py` (small PR).
 
@@ -112,7 +112,7 @@ The point is to hit token, platform and port problems now, with a trivial app, n
 - On `main`: `pytest` green; `docker compose up --build` works from a clean state (`docker compose down -v` first).
 - **Scan:** `docker run --rm -v //var/run/docker.sock:/var/run/docker.sock aquasec/trivy image ghcr.io/moses374/cpr-jengasec-2026:vN`. Fix criticals (usually a newer base image or package version).
 - **Load check:** run Ethan's parallel-transfer script while watching `docker stats`; memory must stay well under the limit.
-- Push the final tag (`vN`, never `latest`), submit, confirm **Healthy** by 11:00. Leave 11:00–14:00 as buffer.
+- Push the final tag (`vN`, never `latest`), submit, confirm **Healthy** by 11:00. Leave 11:00–13:00 as buffer: **the freeze is 13:00 EAT**.
 - Before 14 Oct: all four download their WireGuard profiles and test the connection.
 
 ---
