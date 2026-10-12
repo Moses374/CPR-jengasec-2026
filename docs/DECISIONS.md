@@ -85,6 +85,15 @@ Status per question: `open` → `agreed`.
 - Fail fast: `lock_timeout` 3s → 503 + `Retry-After` (`ledger.lock_timeout`); `statement_timeout` 10s; pool timeout 5s; deadlock retried once after full rollback, then 503 (`ledger.deadlock`).
 - Proof tests (real Postgres, threads released together): 50 parallel transfers with funds for 10 → exactly 10 succeed; crossed A→B / B→A without deadlock; 20 parallel approvals → one posts; approve vs reject → one wins; parallel holds never exceed available funds; the backstop trigger alone prevents overdraft; isolation level asserted.
 
+**Q2 Balances: `agreed`**
+- `posted = SUM(entries.amount)`; `held = SUM(open transfer_requests.amount)` (open = `pending_approval` / `held_review` and `expires_at > now()`); `available = posted − held`.
+- Plain derived `SUM` with a covering index `entries(account_id) INCLUDE (amount)` (index-only scans; Postgres 16 autovacuums insert-only tables). Considered and rejected: balance checkpoints (sequence ids are assigned at insert, not commit, so a late commit can be missed forever), materialized views (stale), and a running `balance_after` column (a stored balance in disguise, and it forces locking receivers).
+- One definition: Postgres functions `ledger_posted_balance(uuid)` and `ledger_available_balance(uuid)` in `0002`, called by both the overdraft trigger and `app/ledger.py`. They return `bigint` and fail closed on overflow.
+- Display reads take no lock; decisions use only balances read inside the locked transaction. Balances are never cached in Python (2 workers).
+- Flooding an account with tiny entries to slow its balance down is limited by: minimum transfer 1.00 KES (request model + `CHECK (amount >= 100)` on `transfer_requests`, to confirm with Adam), rate limits (Kathy) and daily caps (Adam), and the 3s lock timeout. A test seeds 200,000 entries on one account and asserts an Index Only Scan under 50 ms.
+- Balance and history endpoints are scoped to the owner (404 otherwise). System account balances are hidden from customers; only an auditor/admin role sees them.
+- Whole-ledger `SUM(entries) = 0` is checked by reconciliation and logged as part of the anchor outside the DB.
+
 ## Kathy (with Moses on maker-checker): access and approval
 
 1. What roles exist and what can each one do?
