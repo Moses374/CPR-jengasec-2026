@@ -57,6 +57,20 @@ python -m venv .venv
 .venv/Scripts/python -m pytest
 ```
 
+Database tests (the ledger's guarantees) need a real PostgreSQL. Without one they are skipped locally, so start it first; CI runs them with `REQUIRE_DB=1`, where skipping is a failure:
+
+```bash
+docker compose up -d db
+.venv/Scripts/python -m pytest
+```
+
+If something else already uses port 5432 (for example a PostgreSQL installed on Windows), run a separate one and point the tests at it:
+
+```bash
+docker run -d --rm --name ledger-test-pg -p 55432:5432 -e POSTGRES_USER=payments -e POSTGRES_PASSWORD=payments postgres:16-alpine
+TEST_DATABASE_URL=postgresql+psycopg://payments:payments@127.0.0.1:55432/payments REQUIRE_DB=1 .venv/Scripts/python -m pytest
+```
+
 Full stack (needs Docker Desktop running):
 
 ```bash
