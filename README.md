@@ -86,16 +86,16 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 | Member | Role | Owns |
 |---|---|---|
-| **Moses** | Captain, Ops + controls | Pipeline and submission, freeze, fraud allow/review/block, end-of-day reconciliation |
-| **Kathy** | Builder: access and approval | Authentication, roles, ownership checks, lockout and rate limits, maker-checker |
-| **Adam** | Builder: ledger core | Double-entry ledger, atomic transfers, idempotency, limits, reversals, seed data |
+| **Moses** | Captain + builder: ledger core | Double-entry ledger, atomic transfers, seed data, maker-checker (with Kathy), pipeline and submission, freeze |
+| **Kathy** | Builder: access and approval | Authentication, roles, ownership checks, lockout and rate limits, maker-checker (with Moses) |
+| **Adam** | Builder: controls | Idempotency, limits, reversals, fraud allow/review/block, end-of-day reconciliation |
 | **Ethan** | Security specialist | Proposal lead, threat model, append-only log, code review, testing our own service |
 
 Tasks are GitHub issues, one owner each. Design decisions live in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ### How we work
 
-- Branch per task: `kathy/auth`, `adam/ledger`, ... Open a pull request into `main`; never push straight to `main`.
+- Branch per task: `moses/ledger`, `kathy/auth`, `adam/fraud`, ... Open a pull request into `main`; never push straight to `main`.
 - **Ethan reviews every security-critical pull request before it merges.**
 - `main` must always build and pass `pytest`. Moses ships images from `main` only.
 - Check in every 4–6 hours: done, blocked, next.

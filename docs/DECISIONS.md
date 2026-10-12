@@ -14,18 +14,16 @@ Status per question: `open` → `agreed`.
 
 ---
 
-## Adam: ledger core
+## Moses: ledger core
 
 1. What tables hold accounts, transactions and entries? What columns, and which constraints?
 2. How is a balance calculated without a stored balance field? How do we keep it fast enough?
 3. How does a transfer stay atomic when two requests hit the same account at once? (Name the exact mechanism.)
 4. How are amounts stored (type, currency, rounding)?
-5. How do idempotency keys work: who sends them, what scope, how long kept, what happens on a repeat with a different body?
-6. What are the limits (per transfer, per day, per account type), and where are they enforced?
-7. How does a reversal work as a new entry? Who can trigger it? Can a reversal be reversed?
-8. What seed data (made-up) do we ship: accounts, users, balances?
+5. What seed data (made-up) do we ship: accounts, users, opening balances?
+6. Platform: which database settings does JengaSec inject? Exact freeze time on our team page?
 
-## Kathy: access and approval
+## Kathy (with Moses on maker-checker): access and approval
 
 1. What roles exist and what can each one do?
 2. How do users log in: password storage, token type, expiry, logout?
@@ -33,12 +31,14 @@ Status per question: `open` → `agreed`.
 4. Lockout and rate limiting: thresholds, duration, and how we avoid locking out real customers?
 5. Maker-checker: above what amount? Who can approve? Can the maker approve their own request? What happens to requests nobody approves, and when?
 
-## Moses: controls and operations
+## Adam: controls
 
-1. Fraud: which signals do we check (amount, velocity, new payee, time, ...)?
-2. What sends a transfer to **allow**, **review** or **block**? What happens to a transfer under review?
-3. End-of-day reconciliation: what is compared with what? Who or what triggers it? What happens on a mismatch?
-4. Platform: which database settings does JengaSec inject? Exact freeze time on our team page?
+1. How do idempotency keys work: who sends them, what scope, how long kept, what happens on a repeat with a different body?
+2. What are the limits (per transfer, per day, per account type), and where are they enforced?
+3. How does a reversal work as a new entry? Who can trigger it? Can a reversal be reversed?
+4. Fraud: which signals do we check (amount, velocity, new payee, time, ...)?
+5. What sends a transfer to **allow**, **review** or **block**? What happens to a transfer under review?
+6. End-of-day reconciliation: what is compared with what? Who or what triggers it? What happens on a mismatch?
 
 ## Ethan: security and the log
 

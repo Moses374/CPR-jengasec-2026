@@ -10,13 +10,13 @@ What each task involves, how to approach it, what can go wrong, and what "done" 
 
 | File | Owner |
 |---|---|
-| `app/models.py` | Adam creates; others add their own tables at the bottom |
-| `app/ledger.py` | Adam: posting entries, balances, transfers, reversals |
+| `app/models.py` | Moses creates; others add their own tables at the bottom |
+| `app/ledger.py` | Moses: posting entries, balances, transfers. Adam adds reversals |
 | `app/auth.py` | Kathy: login, tokens, current user, role checks |
-| `app/approvals.py` | Kathy: maker-checker |
-| `app/fraud.py`, `app/recon.py` | Moses |
+| `app/approvals.py` | Kathy with Moses: maker-checker |
+| `app/fraud.py`, `app/recon.py` | Adam |
 | `app/audit_log.py` | Ethan |
-| `app/routes/*.py` | Each owner adds their own router; Adam wires them into `app/main.py` |
+| `app/routes/*.py` | Each owner adds their own router; Moses wires them into `app/main.py` |
 | `migrations/versions/` | One new revision per change, numbered in order. Announce in chat before creating one, so two people don't both make `0003`. |
 
 **Every endpoint:**
@@ -39,7 +39,7 @@ What each task involves, how to approach it, what can go wrong, and what "done" 
 
 **Run it like this (90 minutes):**
 1. 10 min: read the APP04 brief together, out loud.
-2. 15 min each: Adam, Kathy, Moses, Ethan present their answers; others challenge them. Use this guide's options as the menu.
+2. 15 min each: Moses, Kathy, Adam, Ethan present their answers; others challenge them. Use this guide's options as the menu.
 3. 20 min: fill the API table together (method, path, role, purpose).
 4. 5 min: confirm who starts what tonight.
 
@@ -78,36 +78,33 @@ The point is to hit token, platform and port problems now, with a trivial app, n
 
 **Done when:** a screenshot of **Healthy** is posted on the issue and the DB variable names are confirmed.
 
-### #4 Fraud allow/review/block and end-of-day reconciliation (Tue ~09:00)
+### #8 Double-entry ledger and atomic transfers (Tue ~06:00)
 
-**Fraud check.** A function the transfer flow calls *before* money moves:
-`assess(transfer, sender_history) -> (decision, reasons)` where decision is `allow`, `review` or `block`.
+**Double entry in one paragraph:** money is never created or destroyed. Every movement is a *transaction* made of two or more *entries*: a debit on one account and an equal credit on another. The entries of each transaction sum to zero. An account's balance is not stored anywhere; it is the **sum of its entries**.
 
-Signals to choose from (pick 3–5, set thresholds as named constants):
+**Tables to design** (decide columns and constraints): accounts, transactions, entries. Things worth enforcing in the database, not just Python: amounts non-zero, entries reference real accounts and transactions, transaction entries balance (check in the posting function, verified by reconciliation).
 
-| Signal | Example rule |
-|---|---|
-| Amount vs history | more than N times the sender's typical transfer |
-| Velocity | more than N transfers, or more than X total, in the last M minutes |
-| New payee | first-ever transfer to this recipient *and* above an amount |
-| Account age | newly created account sending large amounts |
-| Rapid drain | transfer would empty most of the balance |
-| Odd hours | large transfer at unusual times (careful: false positives) |
+**Deriving the balance.** `SELECT COALESCE(SUM(amount), 0) FROM entries WHERE account_id = :id` with an index on `account_id`. Fast enough for this event. Avoid a stored balance column: the brief explicitly forbids a mutable balance.
 
-Decisions to make: which signals give **review** versus **block**; what a held transfer looks like (status `held`, no ledger entries yet); who resolves a review (a staff role) and through which endpoint; what happens if nobody does.
+**Concurrency: pick one mechanism and prove it.**
 
-Guidance: prefer **review** for ambiguous cases. Blocking a real customer counts as damage, and AI Red teams will try to trigger false positives on purpose. Always record the reasons, and log `transfer.review` / `transfer.blocked` so judges and AI defenders can see the control working.
+| Option | How | Trade-off |
+|---|---|---|
+| **Row locks** | In one transaction: `SELECT ... FROM accounts WHERE id IN (:a, :b) ORDER BY id FOR UPDATE`, then compute balance, check, insert entries, commit | Simple and standard. **Always lock in the same order** (by id) or two opposite transfers deadlock. |
+| **SERIALIZABLE isolation** | Run the transfer at `SERIALIZABLE`; retry on serialization failure | Correct by construction; needs a retry loop and can fail under heavy contention |
+| **Advisory locks** | `pg_advisory_xact_lock(account_id)` | Works, but easier to get subtly wrong |
 
-**End-of-day reconciliation.** A check that proves the books are correct. Candidate checks:
-- Every transaction's entries sum to zero (double-entry holds).
-- The sum of all entries across the ledger is zero.
-- No account below its allowed minimum.
-- Every ledger transaction for the day has a matching audit-log record, and the audit log's hash chain verifies (with Ethan).
-- Counts and totals for the day match between ledger and log.
+**Amounts.** Choose integer minor units (`BIGINT` cents) or `NUMERIC(18,2)` with Python `Decimal`. Never floats. In the request model, reject zero, negatives, too many decimal places, non-numbers, and absurd values, and reject transfers to the same account or to accounts that do not exist.
 
-Decisions: how it is triggered (a staff/admin-only endpoint is simplest and testable; a background scheduler is harder with 2 workers), where results are stored (a `recon_runs` table), what happens on a mismatch (log `recon.mismatch` with details, raise an alert state).
+**Transfer flow** (one database transaction, in this order): validate → authorise (Kathy's ownership check) → idempotency check → lock accounts → compute balance → limits → fraud (Adam) → maker-checker threshold (Kathy and Moses) → insert transaction + entries → audit log record (Ethan) → commit.
 
-**Tests:** one per fraud outcome; reconciliation passes on clean data and detects a deliberately broken entry.
+**Seed data:** a migration with made-up customers, accounts and opening balances (an opening balance is itself a transaction from a bank "equity" or "funding" account, so the books still balance).
+
+**Logging:** `transfer.created`, `transfer.denied`, `transfer.insufficient_funds`, `input.rejected`.
+
+**Tests:** the key one: **50 parallel transfers from one account never overspend and the ledger still sums to zero.** A test with threads and real PostgreSQL (via `docker compose up db`) is enough.
+
+**Hand-off:** push the models and the posting function early; Kathy, Adam and Ethan plug into it. Adam's idempotency, limits and reversals (#9) build directly on this, so agree the function signatures with him tonight.
 
 ### #5 Final freeze submission (Tue 11:00)
 
@@ -120,7 +117,7 @@ Decisions: how it is triggered (a staff/admin-only endpoint is simplest and test
 
 ---
 
-## Kathy
+## Kathy (Moses pairs on #7)
 
 ### #6 Authentication and roles (Tue ~06:00)
 
@@ -152,13 +149,13 @@ Either way: short expiry, tokens in the `Authorization: Bearer` header, never in
 
 **Tests:** login ok/fail, lockout triggers and expires, expired token rejected, customer A cannot read customer B's account (404), role checks deny.
 
-**Hand-off:** Adam and Moses depend on `current_user` and `require_role`. Push those first (even before lockout) so they can build on them.
+**Hand-off:** Moses and Adam depend on `current_user` and `require_role`. Push those first (even before lockout) so they can build on them.
 
 ### #7 Maker-checker approvals (Tue ~09:00)
 
 **What it means:** above a threshold, the person who creates a transfer (maker) cannot make it happen alone; a different authorised person (checker) must approve it.
 
-**State machine** (agree it with Adam, since it is his transfer):
+**State machine** (Moses and Kathy build this together: it is part of the transfer flow):
 `pending_approval → approved → posted`, or `pending_approval → rejected`, or `pending_approval → expired`.
 
 **Rules to decide and enforce:**
@@ -169,8 +166,8 @@ Either way: short expiry, tokens in the `Authorization: Bearer` header, never in
 
 **Traps:**
 - **Double approval race:** two checkers approving at once. Do the transition with `UPDATE ... SET status='approved' WHERE id=:id AND status='pending_approval'` and check that exactly one row changed.
-- **Stale funds:** the balance may have changed since the request. Re-check funds and limits *at posting time*, inside Adam's locked transaction.
-- **Splitting:** someone sends many transfers just under the threshold. Moses's velocity rule or a daily threshold can catch it; decide which.
+- **Stale funds:** the balance may have changed since the request. Re-check funds and limits *at posting time*, inside the locked transfer transaction.
+- **Splitting:** someone sends many transfers just under the threshold. Adam's velocity rule or a daily threshold can catch it; decide which.
 
 **Logging:** `approval.requested`, `approval.granted`, `approval.rejected`, `approval.expired`, `approval.self_denied`.
 
@@ -180,33 +177,36 @@ Either way: short expiry, tokens in the `Authorization: Bearer` header, never in
 
 ## Adam
 
-### #8 Double-entry ledger and atomic transfers (Tue ~06:00)
+### #4 Fraud allow/review/block and end-of-day reconciliation (Tue ~09:00)
 
-**Double entry in one paragraph:** money is never created or destroyed. Every movement is a *transaction* made of two or more *entries*: a debit on one account and an equal credit on another. The entries of each transaction sum to zero. An account's balance is not stored anywhere; it is the **sum of its entries**.
+**Fraud check.** A function the transfer flow calls *before* money moves:
+`assess(transfer, sender_history) -> (decision, reasons)` where decision is `allow`, `review` or `block`.
 
-**Tables to design** (decide columns and constraints): accounts, transactions, entries. Things worth enforcing in the database, not just Python: amounts non-zero, entries reference real accounts and transactions, transaction entries balance (check in the posting function, verified by reconciliation).
+Signals to choose from (pick 3–5, set thresholds as named constants):
 
-**Deriving the balance.** `SELECT COALESCE(SUM(amount), 0) FROM entries WHERE account_id = :id` with an index on `account_id`. Fast enough for this event. Avoid a stored balance column: the brief explicitly forbids a mutable balance.
+| Signal | Example rule |
+|---|---|
+| Amount vs history | more than N times the sender's typical transfer |
+| Velocity | more than N transfers, or more than X total, in the last M minutes |
+| New payee | first-ever transfer to this recipient *and* above an amount |
+| Account age | newly created account sending large amounts |
+| Rapid drain | transfer would empty most of the balance |
+| Odd hours | large transfer at unusual times (careful: false positives) |
 
-**Concurrency: pick one mechanism and prove it.**
+Decisions to make: which signals give **review** versus **block**; what a held transfer looks like (status `held`, no ledger entries yet); who resolves a review (a staff role) and through which endpoint; what happens if nobody does.
 
-| Option | How | Trade-off |
-|---|---|---|
-| **Row locks** | In one transaction: `SELECT ... FROM accounts WHERE id IN (:a, :b) ORDER BY id FOR UPDATE`, then compute balance, check, insert entries, commit | Simple and standard. **Always lock in the same order** (by id) or two opposite transfers deadlock. |
-| **SERIALIZABLE isolation** | Run the transfer at `SERIALIZABLE`; retry on serialization failure | Correct by construction; needs a retry loop and can fail under heavy contention |
-| **Advisory locks** | `pg_advisory_xact_lock(account_id)` | Works, but easier to get subtly wrong |
+Guidance: prefer **review** for ambiguous cases. Blocking a real customer counts as damage, and AI Red teams will try to trigger false positives on purpose. Always record the reasons, and log `transfer.review` / `transfer.blocked` so judges and AI defenders can see the control working.
 
-**Amounts.** Choose integer minor units (`BIGINT` cents) or `NUMERIC(18,2)` with Python `Decimal`. Never floats. In the request model, reject zero, negatives, too many decimal places, non-numbers, and absurd values, and reject transfers to the same account or to accounts that do not exist.
+**End-of-day reconciliation.** A check that proves the books are correct. Candidate checks:
+- Every transaction's entries sum to zero (double-entry holds).
+- The sum of all entries across the ledger is zero.
+- No account below its allowed minimum.
+- Every ledger transaction for the day has a matching audit-log record, and the audit log's hash chain verifies (with Ethan).
+- Counts and totals for the day match between ledger and log.
 
-**Transfer flow** (one database transaction, in this order): validate → authorise (Kathy's ownership check) → idempotency check → lock accounts → compute balance → limits → fraud (Moses) → maker-checker threshold (Kathy) → insert transaction + entries → audit log record (Ethan) → commit.
+Decisions: how it is triggered (a staff/admin-only endpoint is simplest and testable; a background scheduler is harder with 2 workers), where results are stored (a `recon_runs` table), what happens on a mismatch (log `recon.mismatch` with details, raise an alert state).
 
-**Seed data:** a migration with made-up customers, accounts and opening balances (an opening balance is itself a transaction from a bank "equity" or "funding" account, so the books still balance).
-
-**Logging:** `transfer.created`, `transfer.denied`, `transfer.insufficient_funds`, `input.rejected`.
-
-**Tests:** the key one: **50 parallel transfers from one account never overspend and the ledger still sums to zero.** A test with threads and real PostgreSQL (via `docker compose up db`) is enough.
-
-**Hand-off:** push the models and the posting function early; Kathy, Moses and Ethan plug into it.
+**Tests:** one per fraud outcome; reconciliation passes on clean data and detects a deliberately broken entry.
 
 ### #9 Idempotency, limits and reversals (Tue ~09:00)
 
@@ -252,7 +252,7 @@ Process: each owner writes their part from `DECISIONS.md` tonight; you merge, ma
 |---|---|---|
 | **Trigger** | A PostgreSQL trigger that raises an error on `UPDATE`, `DELETE` and `TRUNCATE` of the log table | Works even if the app user owns the table |
 | **Permissions** | Grant the app only `INSERT, SELECT` on the table | Only works if the app's DB user is not the table owner; check what the platform gives us |
-| **Hash chain** | Each row stores `hash = sha256(previous_hash + this row's content)` | Makes tampering *detectable*: changing any row breaks every hash after it. Moses's reconciliation verifies it. |
+| **Hash chain** | Each row stores `hash = sha256(previous_hash + this row's content)` | Makes tampering *detectable*: changing any row breaks every hash after it. Adam's reconciliation verifies it. |
 
 **Decide:** which events are recorded (transfer created, held, approved, rejected, reversed, recon run ...), which fields, and how concurrent inserts get the right previous hash (take a lock on insert, or chain per day).
 
