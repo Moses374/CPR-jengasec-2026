@@ -104,6 +104,15 @@ Status per question: `open` → `agreed`.
 - Fixed UUID literals generated once with `uuid4()`; never patterned ids. Names only, no real personal data. Tests create their own data and never depend on seed balances.
 - No transfers against the platform deployment before the freeze (the DB is snapshotted at freeze and restored each event day); test locally with `docker compose`.
 
+**Q6 Platform: `agreed`** (from the JengaSec Image Submission Guide and a local rehearsal on 13 Oct; confirm the two marked items from the first platform run, #3)
+- Database: PostgreSQL 16 in our namespace. The platform passes both `DATABASE_URL` (`postgresql://app:…@db:5432/app`) and `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`. `app/config.py` reads either; the rehearsal used the guide's exact format and migrated to head.
+- Database user: **probably a superuser** (the official image makes `POSTGRES_USER` one; the rehearsal showed `superuser=true`). *Confirm on the platform.* If so, triggers are a second layer a superuser could switch off; the first layer is parameterised SQL (no stacked statements), and detection is `check_controls()` at startup plus anchors in the logs. A separate least-privilege login role is deferred: roles live outside the database, and the platform restores a database snapshot, so it needs testing first.
+- Limits: 2 CPU and 3 GB in total, database included; image under 2 GB. Rehearsal: 61 MB image, about 200 MB of memory for app and database at rest.
+- Snapshot: taken after the frozen image's **first healthy start** and restored before each competition day. Seed data therefore comes only from migrations in the final image; nothing is created by hand on the platform.
+- Freeze: the platform locks our last **passing** image by digest; we can resubmit any number of times before it. Deadline moved by the organisers to 19:00; *confirm the date and whether it covers the proposal too.* Plan: submit `main` as `v1` now to prove the pipeline, then `v2`, `v3`… as features land.
+- Image scan (Trivy, rehearsal): 0 critical. 44 high in the Debian base, mostly without a fix yet. 3 high in Starlette 0.46.2 (static files, Range header, form parsing), none of which the app uses; upgrade FastAPI after #17 if tests stay green.
+- Still open, for the support channel: is stdout kept outside our container, and for how long (the audit anchors depend on it)? Which client address do we see behind the platform's proxy (`src_ip`, per-IP throttling)?
+
 ## Kathy (with Moses on maker-checker): access and approval
 
 1. What roles exist and what can each one do?
