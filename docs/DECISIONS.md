@@ -40,6 +40,17 @@ Status per question: `open` → `agreed`.
 5. What sends a transfer to **allow**, **review** or **block**? What happens to a transfer under review?
 6. End-of-day reconciliation: what is compared with what? Who or what triggers it? What happens on a mismatch?
 
+### Adam's proposal (pending team agreement)
+
+1. Transfer clients must send an opaque `Idempotency-Key` of 1–128 visible ASCII characters. Scope it to the authenticated user; retain its SHA-256 request fingerprint and exact response for 24 hours. Reserve the key in the same database transaction as the transfer. A matching key and body returns the saved response; a matching key with a different body returns `409` and does not run the transfer. Fingerprint canonical JSON (sorted keys, compact separators, UTF-8; reject non-JSON values).
+2. Use Kenyan shillings (**KES / KSh**) throughout. Store amounts as integer cents (100 cents = KSh 1). Cap a single transfer at **250,000 cents (KSh 2,500)** and posted plus pending/held daily outgoing transfers at **1,000,000 cents (KSh 10,000) per account, UTC day**. Do not vary by account type initially. Check both in the account-row-locked posting transaction; pending transfers reserve daily capacity so concurrent or held requests cannot bypass the cap.
+3. Only `approver` and `admin` may request a reversal. In one ledger transaction, create a new transaction referencing the original and copy every original entry with its amount negated. A unique constraint on the reversed transaction ID allows only one reversal; reject reversals of reversal transactions. Reversal requests use the normal maker-checker flow when they exceed its agreed threshold. The ledger remains append-only.
+4. Fraud inputs are: amount versus the sender's typical amount, prior transfer count and value in the last 10 minutes, first-time payee, account age, proportion of available funds drained, and UTC hour. All thresholds live as named policy constants. Review signals: at least 5 prior transfers in 10 minutes or KSh 5,000 outgoing in that window including the proposed transfer; at least 5× the sender's typical transfer and at least KSh 500; a new payee and at least KSh 1,000; an account younger than 24 hours and at least KSh 500; draining at least 90% of available funds with a transfer of at least KSh 1,000; or a transfer of at least KSh 1,000 between 00:00 and 04:59 UTC. Block at 10 or more prior transfers in 10 minutes. These are initial event thresholds and should be tuned against tests, not silently changed in code.
+5. No signal means `allow`; any review signal means `review` unless the hard velocity block applies; the hard velocity signal means `block`. A review is stored as `held` with its reasons and no ledger entries. An `approver` or `admin` other than the maker can approve or reject it within 24 hours; approval re-runs funds, limit, and fraud checks in the locked posting transaction. Unresolved reviews expire without posting.
+6. An `auditor` or `admin` triggers reconciliation through a staff-only endpoint once per UTC business day (and may rerun it). Compare per-transaction entry sums, the global ledger sum, derived balances against each account's minimum, the set of ledger transaction IDs against audit-log transaction IDs, and Ethan's audit hash-chain verification. Persist each result in `recon_runs`. On any mismatch, persist mismatch codes, emit `recon.mismatch`, and leave the run in an alert state; reconciliation never edits ledger entries.
+
+These choices rely on Moses exposing integer-cent ledger entries and account locks, Kathy providing the named staff roles and approval flow, and Ethan exposing audit transaction references plus a hash-chain verifier. Keep this section pending until the team agrees those interfaces and thresholds.
+
 ## Ethan: security and the log
 
 1. What does the append-only log record, and how do we make it impossible to edit or delete rows (database permissions, triggers, hash chain, ...)?
@@ -52,5 +63,5 @@ Status per question: `open` → `agreed`.
 List every endpoint: method, path, who can call it, request, response.
 
 | Method | Path | Role | Purpose |
-|---|---|---|---|
-| | | | |
+| ------ | ---- | ---- | ------- |
+|        |      |      |         |
