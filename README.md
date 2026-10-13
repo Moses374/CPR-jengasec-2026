@@ -57,6 +57,20 @@ python -m venv .venv
 .venv/Scripts/python -m pytest
 ```
 
+Database tests (the ledger's guarantees) need a real PostgreSQL. Without one they are skipped locally, so start it first; CI runs them with `REQUIRE_DB=1`, where skipping is a failure:
+
+```bash
+docker compose up -d db
+.venv/Scripts/python -m pytest
+```
+
+If something else already uses port 5432 (for example a PostgreSQL installed on Windows), run a separate one and point the tests at it:
+
+```bash
+docker run -d --rm --name ledger-test-pg -p 55432:5432 -e POSTGRES_USER=payments -e POSTGRES_PASSWORD=payments postgres:16-alpine
+TEST_DATABASE_URL=postgresql+psycopg://payments:payments@127.0.0.1:55432/payments REQUIRE_DB=1 .venv/Scripts/python -m pytest
+```
+
 Full stack (needs Docker Desktop running):
 
 ```bash
@@ -79,9 +93,14 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 ### Open questions for the organisers
 
-- Exact environment variable names for the PostgreSQL connection (`app/config.py` accepts `DATABASE_URL` or `PG*`).
+- ~~Exact environment variable names for the PostgreSQL connection~~ Answered by the Image Submission Guide: both `DATABASE_URL` and `PG*` (see DECISIONS Q6).
+- Is the platform database user a superuser? (Probably; confirm from the first deployment.)
+- Is stdout kept outside our container, and which client address do we see behind the proxy?
 - Does the database count toward our 3 GB?
 - Which of Blue Team Documentation, Report and Supporting Evidence are required, and can a filing be replaced?
+- Do Red teams or judges get credentials from us? If yes, customer accounts only: which ones?
+- Does the platform database persist across image submissions, or start fresh each time?
+- Can we reset the platform database before the freeze if test data gets in by accident?
 
 ## Team
 
