@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api_auth import router as auth_router
 from app.db import get_db
 from app.observability import RequestLogMiddleware, configure_logging
 
@@ -43,6 +44,8 @@ async def validation_error(request: Request, exc: RequestValidationError):
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
+
+app.include_router(auth_router)
 
 
 @app.get("/healthz", include_in_schema=False)

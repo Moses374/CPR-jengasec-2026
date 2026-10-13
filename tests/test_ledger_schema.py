@@ -99,6 +99,7 @@ def conn(db_engine):
 def world(conn):
     """A funded customer (KES 1,000.00), a second customer, a checker, and the funding account."""
     maker, other, checker = make_user(conn), make_user(conn), make_user(conn)
+    conn.execute(text("UPDATE users SET role = 'approver' WHERE id = :c"), {"c": checker})  # migration 0004: checkers must be approvers
     funding = make_account(conn, kind="system", min_balance=-(10**15))
     src, dst = make_account(conn, maker), make_account(conn, other)
     opening = new_txn(conn, "opening")
@@ -265,9 +266,22 @@ def test_pending_approval_cannot_post_without_checker(conn, world):
 
 
 def test_maker_cannot_be_checker(conn, world):
+    conn.execute(text("UPDATE users SET role = 'approver' WHERE id = :m"), {"m": world["maker"]})  # so only the CHECK can refuse
     req = open_request(conn, world["maker"], world["src"], world["dst"], 10_000)
     conn.commit()
     expect("23514", conn, lambda: approve(conn, req, world["maker"], world["src"], world["dst"], 10_000))
+
+
+def test_checker_must_be_an_active_approver(conn, world):
+    """Migration 0004: the database refuses a checker who is not an approver, or not active."""
+    req = open_request(conn, world["maker"], world["src"], world["dst"], 10_000)
+    conn.commit()
+    customer = make_user(conn)  # default role: customer
+    conn.commit()
+    expect("AC001", conn, lambda: approve(conn, req, customer, world["src"], world["dst"], 10_000))
+    conn.execute(text("UPDATE users SET is_active = false WHERE id = :c"), {"c": world["checker"]})
+    conn.commit()
+    expect("AC001", conn, lambda: approve(conn, req, world["checker"], world["src"], world["dst"], 10_000))
 
 
 def test_above_threshold_cannot_post_directly(conn, world):
