@@ -16,6 +16,7 @@ from app import audit_log, fraud, ledger
 from app.auth import CurrentUser, current_user
 from app.db import get_db
 from app.main import app
+from ledger_test_helpers import fund
 
 THRESHOLD = 10_000_000
 
@@ -69,9 +70,7 @@ def make_customer(db, cents=0, status="active"):
     if cents:
         funding = _one(db, "INSERT INTO accounts (kind, name, min_balance) VALUES ('system', 'funding', :m) RETURNING id",
                        m=-(10**15))
-        txn = _one(db, "INSERT INTO ledger_transactions (kind) VALUES ('opening') RETURNING id")
-        db.execute(text("INSERT INTO entries (transaction_id, account_id, amount) VALUES (:t, :f, :n), (:t, :a, :c)"),
-                   {"t": txn, "f": funding, "a": acct, "n": -cents, "c": cents})
+        fund(db, funding, acct, cents)
     if status != "active":
         db.execute(text("UPDATE accounts SET status = :s WHERE id = :a"), {"s": status, "a": acct})
     db.commit()

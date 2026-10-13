@@ -32,6 +32,7 @@ from app.auth import CurrentUser, current_user
 from app.db import get_db, make_engine
 from app.main import app
 from app.run import SERVER_OPTIONS
+from ledger_test_helpers import fund
 
 pytestmark = pytest.mark.db
 
@@ -154,9 +155,7 @@ def make_person(db, cents=0, role="customer"):
     if cents:
         funding = _one(db, "INSERT INTO accounts (kind, name, min_balance) VALUES ('system', 'funding', :m) RETURNING id",
                        m=-(10**15))
-        txn = _one(db, "INSERT INTO ledger_transactions (kind) VALUES ('opening') RETURNING id")
-        db.execute(text("INSERT INTO entries (transaction_id, account_id, amount) VALUES (:t, :f, :n), (:t, :a, :c)"),
-                   {"t": txn, "f": funding, "a": acct, "n": -cents, "c": cents})
+        fund(db, funding, acct, cents)
     db.commit()
     token = "t-" + uuid.uuid4().hex
     TOKENS[token] = CurrentUser(id=user, username="test-user", role=role, session_id=uuid.uuid4(), src_ip="127.0.0.1")
