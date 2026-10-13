@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
 from app import observability as audit
+from app.api_auth import router as auth_router
 from app.db import get_db
 from app.observability import BodySizeLimit, RequestLogMiddleware, configure_logging
 from app.routes import ledger as ledger_routes
@@ -49,6 +50,8 @@ async def validation_error(request: Request, exc: RequestValidationError):
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
+
+app.include_router(auth_router)
 
 
 @app.exception_handler(Exception)

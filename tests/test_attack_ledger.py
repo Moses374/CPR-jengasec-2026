@@ -146,7 +146,8 @@ def _one(db, sql, **params):
 
 
 def make_person(db, cents=0, role="customer"):
-    user = _one(db, "INSERT INTO users (username) VALUES (:u) RETURNING id", u=f"x{uuid.uuid4().hex[:12]}")
+    user = _one(db, "INSERT INTO users (username, role) VALUES (:u, :r) RETURNING id", u=f"x{uuid.uuid4().hex[:12]}",
+                r=role)
     acct = None
     if role == "customer" or cents:
         acct = _one(db, "INSERT INTO accounts (owner_id, kind, name) VALUES (:o, 'customer', 'current') RETURNING id", o=user)
@@ -158,7 +159,7 @@ def make_person(db, cents=0, role="customer"):
                    {"t": txn, "f": funding, "a": acct, "n": -cents, "c": cents})
     db.commit()
     token = "t-" + uuid.uuid4().hex
-    TOKENS[token] = CurrentUser(id=user, role=role)
+    TOKENS[token] = CurrentUser(id=user, username="test-user", role=role, session_id=uuid.uuid4(), src_ip="127.0.0.1")
     return Person(user, acct, token, role)
 
 
@@ -218,7 +219,10 @@ ROUTES = [
     ("POST", "/api/v1/reconciliation/runs", {"business_date": "2026-10-13"}),
     ("GET", "/api/v1/reconciliation/runs", None),
     ("GET", f"/api/v1/reconciliation/runs/{uuid.uuid4()}", None),
+    ("POST", "/api/v1/auth/logout", None),
+    ("GET", "/api/v1/me", None),
 ]
+PUBLIC_ROUTES = {("POST", "/api/v1/auth/login")}   # the one route that must work without a token (Kathy)
 
 
 @pytest.mark.parametrize("header", [None, "Bearer garbage", "Bearer " + "A" * 5000, "Basic YWRtaW46YWRtaW4=",
@@ -239,7 +243,7 @@ def test_a18_every_route_in_openapi_is_covered_by_this_file(http):
                         for part in path.split("/"))
 
     published = {(m.upper(), shape(p)) for p, item in http.get("/openapi.json").json()["paths"].items() for m in item}
-    covered = {(m, shape(p)) for m, p, _ in ROUTES}
+    covered = {(m, shape(p)) for m, p, _ in ROUTES} | PUBLIC_ROUTES
     assert published <= covered, f"a new route has no attack coverage here: {sorted(published - covered)}"
 
 
@@ -383,7 +387,7 @@ def test_a4_approval_flow_and_its_refusals(http, db):
 
 def test_a4_a_maker_who_became_an_approver_cannot_approve_their_own_request(http, db):
     maker, other, _, req = pending(http, db)
-    TOKENS[maker.token] = CurrentUser(id=maker.id, role="approver")      # promoted after creating the request
+    TOKENS[maker.token] = CurrentUser(id=maker.id, username="test-user", role="approver", session_id=uuid.uuid4(), src_ip="127.0.0.1")      # promoted after creating the request
     r = http.post(f"/api/v1/approvals/{req}/approve", json={"expected_amount": "100000.01"}, headers=maker.auth)
     assert r.status_code == 403 and r.json() == {"error": "self_approval"}
     assert http.post(f"/api/v1/approvals/{req}/reject", headers=maker.auth).status_code == 403
@@ -582,7 +586,7 @@ def test_the_request_log_line_names_the_same_outcome_as_the_audit_row(http, db, 
     elif expected == "authz.ownership_denied":
         send = lambda: transfer(http, stranger, other.account, "5.00", src=maker.account)
     elif expected == "approval.self_denied":
-        TOKENS[maker.token] = CurrentUser(id=maker.id, role="approver")
+        TOKENS[maker.token] = CurrentUser(id=maker.id, username="test-user", role="approver", session_id=uuid.uuid4(), src_ip="127.0.0.1")
         send = lambda: http.post(f"/api/v1/approvals/{req}/approve", json={"expected_amount": "100000.01"}, headers=maker.auth)
     else:
         send = lambda: http.post(f"/api/v1/approvals/{req}/reject", headers=stranger.auth)        # a customer, not an approver

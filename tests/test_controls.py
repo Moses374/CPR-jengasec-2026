@@ -70,7 +70,8 @@ def person(db, cents=0, role="customer", age_days=30):
 
 
 def staff(db, role):
-    uid = _one(db, "INSERT INTO users (username) VALUES (:u) RETURNING id", u=f"s{uuid.uuid4().hex[:12]}")
+    uid = _one(db, "INSERT INTO users (username, role) VALUES (:u, :r) RETURNING id", u=f"s{uuid.uuid4().hex[:12]}",
+               r=role)
     db.commit()
     return ledger.Actor(user_id=uid, role=role, src_ip="10.0.0.8")
 
@@ -309,6 +310,17 @@ def test_reversal_needs_a_teller_and_a_different_approver_and_restores_balances(
         assert _one(db, "SELECT kind FROM ledger_transactions WHERE id = :t", t=rev_txn) == "reversal"
 
 
+def test_only_an_approver_can_approve_a_reversal(Session):
+    """A second teller (not the maker) is still refused by the database: checkers must be approvers."""
+    with Session() as db:
+        _, _, _, b, tid = posted_transfer(db)
+        teller, other_teller = staff(db, "teller"), staff(db, "teller")
+        rid = ledger.request_reversal(db, teller, transfer_request_id=tid, reason="dispute").id
+        with pytest.raises(ledger.NotApprover):
+            ledger.approve_reversal(db, other_teller, reversal_id=rid, expected_amount_cents=1_000 * KSH)
+        assert ledger.posted_balance(db, b) == 1_000 * KSH
+
+
 def test_a_transfer_is_reversed_at_most_once(Session):
     with Session() as db:
         _, _, _, _, tid = posted_transfer(db)
@@ -449,7 +461,7 @@ def api(Session):
 
 
 def as_user(actor, role):
-    app.dependency_overrides[current_user] = lambda: CurrentUser(id=actor.user_id, role=role)
+    app.dependency_overrides[current_user] = lambda: CurrentUser(id=actor.user_id, username="test-user", role=role, session_id=uuid.uuid4(), src_ip="127.0.0.1")
 
 
 def test_http_replay_reversal_and_queue(api, Session):
