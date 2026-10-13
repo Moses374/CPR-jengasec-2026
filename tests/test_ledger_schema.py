@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from app.db import make_engine
+from ledger_test_helpers import fund, lock_is_on, raw_opening
 
 pytestmark = pytest.mark.db
 
@@ -52,6 +53,8 @@ def make_account(conn, owner=None, *, kind="customer", min_balance=0, status="ac
 
 
 def new_txn(conn, kind="transfer"):
+    if kind == "opening":
+        return raw_opening(conn)   # these tests end in a rollback
     return one(conn, "INSERT INTO ledger_transactions (kind) VALUES (:k) RETURNING id", k=kind)
 
 
@@ -93,6 +96,7 @@ def conn(db_engine):
     with db_engine.connect() as c:
         yield c
         c.rollback()
+        assert lock_is_on(c), "a test left the no-new-openings lock switched off"
 
 
 @pytest.fixture
@@ -102,9 +106,7 @@ def world(conn):
     conn.execute(text("UPDATE users SET role = 'approver' WHERE id = :c"), {"c": checker})  # migration 0004: checkers must be approvers
     funding = make_account(conn, kind="system", min_balance=-(10**15))
     src, dst = make_account(conn, maker), make_account(conn, other)
-    opening = new_txn(conn, "opening")
-    add_entry(conn, opening, funding, -100_000)
-    add_entry(conn, opening, src, 100_000)
+    fund(conn, funding, src, 100_000)
     conn.commit()
     return {"maker": maker, "checker": checker, "funding": funding, "src": src, "dst": dst}
 
@@ -127,6 +129,19 @@ def test_unbalanced_transaction_rejected_at_commit(conn, world, amounts):
 
 def test_transaction_without_entries_rejected(conn, world):
     expect("LG001", conn, lambda: new_txn(conn, "opening"))
+
+
+def test_no_new_opening_balances_after_the_seed(conn, world):
+    """Money is only ever issued by the seed migration: a new opening is refused, even by raw SQL."""
+    expect("LG006", conn, lambda: conn.execute(text("INSERT INTO ledger_transactions (kind) VALUES ('opening')")))
+    assert one(conn, "SELECT count(*) FROM audit_log WHERE action = 'seed.loaded'") == 1
+
+
+def test_seed_is_balanced_and_users_have_real_hashes(conn):
+    assert one(conn, "SELECT COALESCE(SUM(amount), 0) FROM entries") == 0
+    assert one(conn, "SELECT count(*) FROM users WHERE username = 'amina.wekesa' AND password_hash LIKE '$argon2id$%'") == 1
+    assert one(conn, "SELECT count(*) FROM users WHERE role = 'approver' AND username LIKE 'approver.%'") == 2
+    assert one(conn, "SELECT status FROM accounts a JOIN users u ON u.id = a.owner_id WHERE u.username = 'esther.njeri'") == "frozen"
 
 
 def test_opening_cannot_debit_a_customer(conn, world):
@@ -170,7 +185,7 @@ def test_reversals_blocked_until_enabled(conn, world):
 
 
 def test_timestamps_come_from_the_database(conn, world):
-    txn = one(conn, "INSERT INTO ledger_transactions (kind, created_at) VALUES ('opening', '2000-01-01') RETURNING id")
+    txn = raw_opening(conn, created_at="2000-01-01")
     add_entry(conn, txn, world["funding"], -100)
     add_entry(conn, txn, world["dst"], 100)
     assert one(conn, "SELECT created_at > now() - interval '1 minute' FROM ledger_transactions WHERE id = :t", t=txn)
@@ -286,9 +301,7 @@ def test_checker_must_be_an_active_approver(conn, world):
 
 def test_above_threshold_cannot_post_directly(conn, world):
     rich = make_account(conn, world["maker"])
-    txn = new_txn(conn, "opening")
-    add_entry(conn, txn, world["funding"], -(THRESHOLD + 100))
-    add_entry(conn, txn, rich, THRESHOLD + 100)
+    fund(conn, world["funding"], rich, THRESHOLD + 100)
     conn.commit()
     expect("LG006", conn, lambda: post_transfer(conn, world["maker"], rich, world["dst"], THRESHOLD + 100))
     # held for review, then released without a checker: still refused

@@ -19,6 +19,7 @@ from app import audit_log, controls, fraud, ledger, recon
 from app.auth import CurrentUser, current_user
 from app.db import get_db
 from app.main import app
+from ledger_test_helpers import fund
 
 pytestmark = pytest.mark.db
 
@@ -62,9 +63,7 @@ def person(db, cents=0, role="customer", age_days=30):
     if cents:
         funding = _one(db, "INSERT INTO accounts (kind, name, min_balance) VALUES ('system', 'funding', :m) "
                            "RETURNING id", m=-(10**15))
-        txn = _one(db, "INSERT INTO ledger_transactions (kind) VALUES ('opening') RETURNING id")
-        db.execute(text("INSERT INTO entries (transaction_id, account_id, amount) VALUES (:t, :f, :n), (:t, :a, :c)"),
-                   {"t": txn, "f": funding, "a": acct, "n": -cents, "c": cents})
+        fund(db, funding, acct, cents)
     db.commit()
     return ledger.Actor(user_id=uid, role=role, src_ip="10.0.0.9"), acct
 
