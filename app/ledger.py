@@ -213,8 +213,11 @@ _MARK_REFUSAL = {
 
 
 def mark(err: LedgerError) -> None:
-    """Name a refusal on the request log line when it happened outside a money transaction."""
-    _MARK_REFUSAL.get(err.action, lambda: observability.action("transfer.denied"))()
+    """Name a refusal on the request log line when it happened outside a money transaction.
+    Refusals from a money transaction were already named by audit_log.record(); leave those alone."""
+    marker = _MARK_REFUSAL.get(err.action)
+    if marker:
+        marker()
 
 
 def _record_denial(db: Session, actor: Actor, err: LedgerError, request_id=None, details: dict | None = None) -> None:

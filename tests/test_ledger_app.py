@@ -363,3 +363,24 @@ def test_http_requires_idempotency_key_and_roles(api, Session):
     assert r.status_code == 403                                   # customers cannot approve
     as_user(alice, "approver")
     assert api.post("/api/v1/transfers", json=body, headers={"Idempotency-Key": uuid.uuid4().hex}).status_code == 403
+
+
+# --------------------------------------------------------------- body size limit
+
+def test_chunked_body_without_content_length_is_still_limited():
+    """A client that omits or lies about Content-Length still cannot send more than 16 KB."""
+    client = TestClient(app)
+
+    def chunks():
+        for _ in range(40):
+            yield b"A" * 1024
+
+    r = client.post("/api/v1/transfers", content=chunks(), headers={"Content-Type": "application/json"})
+    assert r.status_code == 413 and r.json() == {"error": "payload_too_large"}
+    r = client.post("/api/v1/transfers", content=b"{}", headers={"Content-Length": "999999999"})
+    assert r.status_code == 413
+
+
+def test_small_bodies_pass_the_limit():
+    r = TestClient(app).post("/api/v1/transfers", json={"amount": "1.00"}, headers={"Idempotency-Key": "k" * 16})
+    assert r.status_code == 401   # reached the route (and its auth), not stopped by the limit

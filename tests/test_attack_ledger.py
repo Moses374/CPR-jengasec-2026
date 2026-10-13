@@ -31,6 +31,7 @@ from app import audit_log
 from app.auth import CurrentUser, current_user
 from app.db import get_db, make_engine
 from app.main import app
+from app.run import SERVER_OPTIONS
 
 pytestmark = pytest.mark.db
 
@@ -89,8 +90,8 @@ def base_url(engine, log_lines):
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_config=None, access_log=False,
-                                           server_header=False, date_header=False, lifespan="off"))
+    options = {**SERVER_OPTIONS, "log_config": None}   # production settings; pytest keeps its own logging
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", **options))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     for _ in range(100):
@@ -514,7 +515,6 @@ def test_a14_malformed_requests_leak_nothing(http, db):
     assert balance(db, alice.account) == 100_000
 
 
-@pytest.mark.xfail(strict=True, reason="Moses: FastAPI redirect_slashes is on; fix: FastAPI(redirect_slashes=False) in app/main.py")
 def test_a14_a_redirect_never_repeats_an_attacker_chosen_host(http, db):
     r = http.post("/api/v1/transfers/", headers={"Host": "evil.example", "X-Forwarded-Proto": "https"})
     assert "evil.example" not in r.headers.get("location", "") and r.status_code != 307
@@ -530,7 +530,6 @@ def test_a14_duplicate_json_keys_cannot_smuggle_a_second_amount(http, db):
         assert moved == _one(db, "SELECT amount FROM transfer_requests WHERE id = :r", r=r.json()["id"])
 
 
-@pytest.mark.xfail(strict=True, reason="T1 (Moses/Kathy): no request body size limit yet; a 2 MB body is read in full")
 def test_a15_a_huge_body_is_refused_with_413(http, db):
     alice = make_person(db, 100_000)
     r = http.post("/api/v1/transfers", content=b'{"memo":"' + b"A" * 2_000_000 + b'"}',
@@ -552,14 +551,11 @@ def logged_actions(log_lines, timeout=3.0):
     return []
 
 
-_MARK_BUG = pytest.mark.xfail(strict=True, reason="Moses: ledger.mark() overwrites the specific action with transfer.denied")
-
-
 @pytest.mark.parametrize("expected", [
-    pytest.param("approval.mismatch", marks=_MARK_BUG),
-    pytest.param("transfer.insufficient_funds", marks=_MARK_BUG),
+    "approval.mismatch",
+    "transfer.insufficient_funds",
     "authz.ownership_denied",
-    pytest.param("approval.self_denied", marks=_MARK_BUG),
+    "approval.self_denied",
     "authz.denied",
 ])
 def test_the_request_log_line_names_the_same_outcome_as_the_audit_row(http, db, log_lines, expected):
@@ -582,8 +578,6 @@ def test_the_request_log_line_names_the_same_outcome_as_the_audit_row(http, db, 
     assert logged_actions(log_lines) == [expected]
 
 
-@pytest.mark.xfail(strict=True, reason="Moses + O3: uvicorn trusts X-Forwarded-For from 127.0.0.1 (its default); set forwarded_allow_ips "
-                                       "in app/run.py once the platform proxy's address is known")
 def test_x_forwarded_for_is_not_trusted_for_the_audit_source_address(http, db):
     alice, bob = make_person(db, 100_000), make_person(db)
     r = http.post("/api/v1/transfers", json={"from_account_id": str(alice.account), "to_account_id": str(bob.account), "amount": "1.00"},

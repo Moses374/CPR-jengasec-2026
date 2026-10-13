@@ -9,7 +9,7 @@ import logging
 
 from app import observability as audit
 from app.db import get_db
-from app.observability import RequestLogMiddleware, configure_logging
+from app.observability import BodySizeLimit, RequestLogMiddleware, configure_logging
 from app.routes import ledger as ledger_routes
 
 configure_logging()
@@ -20,6 +20,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     docs_url=None,   # no Swagger / ReDoc UI shipped
     redoc_url=None,
+    redirect_slashes=False,  # a redirect would echo the attacker's Host header in Location
 )
 
 
@@ -33,6 +34,7 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+app.add_middleware(BodySizeLimit)
 # Added last, so it is outermost and logs every request, including ones other layers reject.
 app.add_middleware(RequestLogMiddleware)
 
