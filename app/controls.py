@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from pydantic import BaseModel
+from sqlalchemy import text
 
 IDEMPOTENCY_KEY_RE = r"^[A-Za-z0-9_-]{8,64}$"
 _IDEMPOTENCY_KEY_PATTERN = re.compile(IDEMPOTENCY_KEY_RE)
@@ -22,6 +23,70 @@ class LimitExceeded(ValueError):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class TransferLimits:
+    minimum_cents: int
+    per_transfer_cents: int
+    per_day_cents: int
+
+
+DEFAULT_TRANSFER_LIMITS = TransferLimits(
+    MIN_TRANSFER_CENTS,
+    MAX_TRANSFER_CENTS,
+    MAX_DAILY_OUTGOING_CENTS,
+)
+
+
+def load_transfer_limits(db) -> TransferLimits:
+    """Read policy values from immutable ledger settings, never from the request."""
+    names = {
+        "minimum": "min_transfer_cents",
+        "per_transfer": "max_transfer_cents",
+        "per_day": "max_daily_outgoing_cents",
+    }
+    rows = db.execute(
+        text("SELECT key, value FROM ledger_settings WHERE key IN (:minimum, :per_transfer, :per_day)"),
+        names,
+    ).all()
+    values = {row.key: int(row.value) for row in rows}
+    required = set(names.values())
+    if not required.issubset(values):
+        raise RuntimeError("transfer limit settings are incomplete")
+    limits = TransferLimits(
+        minimum_cents=values[names["minimum"]],
+        per_transfer_cents=values[names["per_transfer"]],
+        per_day_cents=values[names["per_day"]],
+    )
+    if (
+        limits.minimum_cents <= 0
+        or limits.per_transfer_cents < limits.minimum_cents
+        or limits.per_day_cents < limits.minimum_cents
+    ):
+        raise RuntimeError("transfer limit settings are invalid")
+    return limits
+
+
+def daily_outgoing_used_cents(db, account_id, *, exclude_request_id=None) -> int:
+    """Read today's posted debits plus unexpired holds, optionally excluding one request."""
+    result = db.execute(
+        text(
+            "SELECT COALESCE(SUM(CASE "
+            "WHEN tr.status = 'posted' AND lt.created_at >= "
+            "     date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' "
+            " AND lt.created_at < (date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') + interval '1 day' "
+            "THEN tr.amount "
+            "WHEN tr.status IN ('pending_approval', 'held_review') AND tr.expires_at > now() "
+            "THEN tr.amount ELSE 0 END), 0)::BIGINT "
+            "FROM transfer_requests tr "
+            "LEFT JOIN ledger_transactions lt ON lt.id = tr.ledger_transaction_id "
+            "WHERE tr.from_account_id = :account_id "
+            "AND (CAST(:exclude_request_id AS uuid) IS NULL OR tr.id <> CAST(:exclude_request_id AS uuid))"
+        ),
+        {"account_id": account_id, "exclude_request_id": exclude_request_id},
+    ).scalar_one()
+    return int(result)
 
 
 def validate_idempotency_key(key: str) -> str:
@@ -60,7 +125,11 @@ def fingerprint_operation(method: str, path: str, body: BaseModel) -> str:
     )
 
 
-def check_transfer_limits(amount_cents: int, daily_used_cents: int) -> None:
+def check_transfer_limits(
+    amount_cents: int,
+    daily_used_cents: int,
+    limits: TransferLimits = DEFAULT_TRANSFER_LIMITS,
+) -> None:
     """Enforce transfer and UTC-day caps against posted plus reserved outgoing value.
 
     The caller must compute ``daily_used_cents`` while holding the sender account
@@ -71,14 +140,21 @@ def check_transfer_limits(amount_cents: int, daily_used_cents: int) -> None:
         raise LimitExceeded("amount_invalid")
     if isinstance(daily_used_cents, bool) or not isinstance(daily_used_cents, int):
         raise ValueError("daily_used_cents must be an integer")
-    if amount_cents < MIN_TRANSFER_CENTS:
+    if amount_cents < limits.minimum_cents:
         raise LimitExceeded("amount_invalid")
-    if amount_cents > MAX_TRANSFER_CENTS:
+    if amount_cents > limits.per_transfer_cents:
         raise LimitExceeded("per_transfer_limit")
     if daily_used_cents < 0:
         raise ValueError("daily_used_cents cannot be negative")
-    if daily_used_cents + amount_cents > MAX_DAILY_OUTGOING_CENTS:
+    if daily_used_cents + amount_cents > limits.per_day_cents:
         raise LimitExceeded("daily_limit")
+
+
+def check_transfer_request_limits(db, *, account_id, amount_cents: int, request_id) -> None:
+    """Check a pending request at approval without counting its own reservation twice."""
+    limits = load_transfer_limits(db)
+    daily_used = daily_outgoing_used_cents(db, account_id, exclude_request_id=request_id)
+    check_transfer_limits(amount_cents, daily_used, limits)
 
 
 @dataclass(frozen=True)
