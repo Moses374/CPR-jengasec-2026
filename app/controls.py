@@ -2,10 +2,14 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-MAX_IDEMPOTENCY_KEY_LENGTH = 64
+from pydantic import BaseModel
+
+IDEMPOTENCY_KEY_RE = r"^[A-Za-z0-9_-]{8,64}$"
+_IDEMPOTENCY_KEY_PATTERN = re.compile(IDEMPOTENCY_KEY_RE)
 MIN_TRANSFER_CENTS = 100
 MAX_TRANSFER_CENTS = 250_000
 MAX_DAILY_OUTGOING_CENTS = 1_000_000
@@ -21,11 +25,9 @@ class LimitExceeded(ValueError):
 
 
 def validate_idempotency_key(key: str) -> str:
-    """Return a usable key or reject empty, oversized, or non-visible values."""
-    if not key or len(key) > MAX_IDEMPOTENCY_KEY_LENGTH:
-        raise ValueError("Idempotency-Key must contain 1 to 64 visible ASCII characters")
-    if any(ord(character) < 0x21 or ord(character) > 0x7E for character in key):
-        raise ValueError("Idempotency-Key must contain only visible ASCII characters")
+    """Enforce the same restricted key format used by FastAPI header validation."""
+    if not isinstance(key, str) or not _IDEMPOTENCY_KEY_PATTERN.fullmatch(key):
+        raise ValueError("Idempotency-Key must match [A-Za-z0-9_-]{8,64}")
     return key
 
 
@@ -45,6 +47,17 @@ def request_fingerprint(body: Mapping[str, object]) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def fingerprint_operation(method: str, path: str, body: BaseModel) -> str:
+    """Fingerprint the validated model the handler executes, including route identity."""
+    if not method or not path.startswith("/") or "?" in path:
+        raise ValueError("method and absolute path are required")
+    if not isinstance(body, BaseModel):
+        raise TypeError("body must be the validated Pydantic request model")
+    return request_fingerprint(
+        {"method": method.upper(), "path": path, "body": body.model_dump(mode="json")}
+    )
 
 
 def check_transfer_limits(amount_cents: int, daily_used_cents: int) -> None:
