@@ -131,6 +131,92 @@ Status per question: `open` → `agreed`.
 4. Lockout and rate limiting: thresholds, duration, and how we avoid locking out real customers?
 5. Maker-checker: above what amount? Who can approve? Can the maker approve their own request? What happens to requests nobody approves, and when?
 
+### Answers
+
+**Q1 Roles: `open`** (proposal for the team to agree; Moses, Ethan and Adam please check the matrix and the two flags below)
+
+- Five roles, **one per user**, stored in `users.role` with a `CHECK` on the list: `customer`, `teller`, `approver`, `auditor`, `admin`. The role is read from the database on every request, never from the token, so changing or removing a role takes effect at once (T4).
+- **Default deny.** Every route declares `require_role(...)`; a route with no declaration, or a user whose role is not in the list, gets 401/403. `tests/attack` walks `/openapi.json` and fails if any route answers a caller with no token with anything but 401 (T7).
+- **Separation of duties.** Nobody can both make and check money. `admin` has no money powers: no transfers, no approvals. A single stolen admin session cannot move funds.
+- Customers are scoped to their own objects and get 404 for anything else (T8). Staff roles are not scoped by owner, but only `auditor` and `admin` see system accounts (Moses, Q2).
+- No registration, password reset or user-management endpoint (Ethan's API draft). Users and roles come from the seed migration only.
+
+| Action                                            | customer | teller | approver | auditor | admin |
+| ------------------------------------------------- | :------: | :----: | :------: | :-----: | :---: |
+| Log in, log out, `GET /me`                        |    yes   |   yes  |    yes   |   yes   |  yes  |
+| Read own accounts, statements, own transfers      |    yes   |    -   |     -    |    -    |   -   |
+| Read all accounts, statements, transfers          |     -    |   yes  |    yes   |   yes   |  yes  |
+| Read system accounts (e.g. `JengaBank Funding`)   |     -    |    -   |     -    |   yes   |  yes  |
+| Create a transfer (from own account only)         |    yes   |    -   |     -    |    -    |   -   |
+| Approve or reject a request / held review         |     -    |    -   |  yes (not the maker) |    -    |   -   |
+| Request a reversal                                |     -    |   yes  |     -    |    -    |   -   |
+| Approve a reversal                                |     -    |    -   |  yes (not the maker) |    -    |   -   |
+| Start a reconciliation run                        |     -    |    -   |     -    |    -    |  yes  |
+| Read reconciliation runs                          |     -    |    -   |     -    |   yes   |  yes  |
+| Read the audit log and verify the hash chain      |     -    |    -   |     -    |   yes   |   -   |
+
+Why these choices
+
+- `teller` is the operator: sees everything customers do and starts reversals, but cannot create transfers for a customer or approve anything, so a teller account cannot move money on its own.
+- `approver` is the only checker. The maker can never be the checker, even if the maker is an approver (`checker_id <> maker_id`, T21).
+- `auditor` is read-only everywhere, including system accounts and the audit log. `admin` does not read the audit log, so one account cannot both change the system and review the evidence of it.
+
+Flags for the others (these differ from earlier drafts)
+
+1. **Adam, held reviews and reversals.** Your proposal lets `approver` **and `admin`** release held reviews and request reversals. This matrix says approvers only release or approve, and only `teller` requests a reversal (as in Ethan's API draft), to keep `admin` out of the money path. Say if you disagree; otherwise please update your section.
+2. **Adam, reconciliation trigger.** Your proposal lets `auditor` **or** `admin` start a run; the API draft says `admin`. Here: `admin` starts it, both read it.
+
+Role names are final once agreed: Moses's seed uses them for the 1 teller, 2 approvers, 1 auditor and 1 admin.
+
+**Q2 Login, passwords, tokens: `open`**
+
+- **Passwords:** argon2id via `argon2-cffi` (added to `requirements.txt`), parameters `m=19456` KiB, `t=2`, `p=1` (the OWASP minimum). Stored as the standard PHC string (`$argon2id$v=19$m=19456,t=2,p=1$...`) in `users.password_hash`; this is the format Moses's seed migration must produce. Memory is the limit here (3 GB for app and database, 2 workers), so a semaphore allows at most 4 hashes at once per worker; the rest wait or get 429. `check_needs_rehash` upgrades a hash on login if the parameters ever change. Passwords are never logged or returned.
+- **Token: opaque session token**, not JWT. 32 random bytes (`secrets.token_urlsafe`) are returned once; only its SHA-256 is stored in `sessions(id, user_id, token_hash UNIQUE, created_at, expires_at, revoked_at)`. Both workers share it, there is no signing secret to lose at the snapshot, and logout is real. Chosen over JWT because of T4: role and status are read from the database on every request anyway.
+- **Expiry:** fixed 30 minutes (`expires_in: 1800`), no refresh; log in again. Logout sets `revoked_at` (the row stays as evidence). Expired sessions are deleted opportunistically on login; at most 5 active sessions per user, the oldest is revoked first.
+- **Every request:** `Authorization: Bearer <token>` only (never a URL or cookie). One query joins `sessions` and `users` and checks `revoked_at IS NULL`, `expires_at > now()` (DB clock) and `users.is_active`. Any failure is a 401 `{"error": "unauthenticated"}`, action `token.invalid`.
+- **Generic failure:** unknown user, wrong password, inactive user and malformed username all return the same 401 `{"error": "invalid_credentials"}`. For an unknown user we still verify against a dummy hash, so timing matches (T5). Usernames are trimmed and lowercased before lookup, and anything outside `^[a-z0-9._-]{3,32}$` takes the same 401 path (A17).
+- **Schema (revision `0004`, after Ethan's `0003`):** `users` gains `password_hash TEXT NOT NULL`, `role TEXT NOT NULL CHECK (role IN (...))`, `is_active BOOLEAN NOT NULL DEFAULT true`; new `sessions`, `login_attempts` and `rate_counters` tables. Seed users get random 20+ character passwords (Moses, Q5); no `admin/admin`.
+
+**Q3 Ownership checks: `open`**
+
+- **Customers:** every query for an account, entry, transfer request or approval carries the caller in the SQL (`WHERE a.id = :id AND a.owner_id = :me`; for transfers `AND maker_id = :me`). The id of the object and the caller are checked in one statement, never "fetch, then compare".
+- **Foreign or missing id:** the same 404 `{"error": "not_found"}` for "does not exist" and "not yours", so ids cannot be probed (T8). The not-yours case sets action `authz.ownership_denied`; the client cannot tell the two apart.
+- **Creating a transfer:** `from_account_id` must be an account the caller owns, otherwise 404 (not 403). `to_account_id` may be anyone's, but a non-existent, frozen or system target gets one generic refusal so recipients cannot be enumerated.
+- **Staff:** not scoped by owner, but only through the role dependency; reading an account they do not own logs `account.read_privileged`. Only `auditor` and `admin` see system accounts.
+- **Ids:** UUIDs (Moses, decided); a path id that is not a UUID is a 404, not a 500.
+- **One place:** `app/auth.py` exposes `current_user`, `require_role(*roles)`, and `owned_account_clause()` / `owned_request_clause()` helpers that return the SQL fragment and bind parameter, so a route cannot forget the filter. Ethan's reviewer checklist item 1 is the backstop.
+
+**Q4 Lockout and rate limiting: `open`**
+
+All counters live in PostgreSQL (two workers, snapshot at freeze), keyed by the normalised username string, so an unknown name is counted and locked exactly like a real one (no enumeration).
+
+| Control                         | Rule                                                                                            | Response            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------- |
+| Per (username, IP)              | 5 failures in 15 min lock this pair for 30 s; each further failure doubles it, capped at 15 min | 429 + `Retry-After` |
+| Per username, any IP            | 30 failures in 15 min give a flat 60 s pause for everyone trying that name; never longer        | 429 + `Retry-After` |
+| Per IP (login)                  | 30 login attempts per minute, any username (credential stuffing)                                | 429                 |
+| Authenticated API               | 120 requests per minute per user                                                                | 429                 |
+| `POST /transfers`, approvals    | 20 per minute per user                                                                          | 429                 |
+| Unauthenticated, other routes   | 60 per minute per IP                                                                            | 429                 |
+
+- A successful login resets the (username, IP) counter. Lockout is never permanent and never needs a manual unlock (T6).
+- **Why real customers are not locked out on purpose (T6):** an attacker on another IP only triggers the 60 s username pause, and the customer's own (username, IP) pair stays clean, so they can log in again after at most 60 s. A hard lockout would let anyone lock Amina out.
+- A locked pair returns 429 *before* the password is checked, so a correct guess during lockout reveals nothing. Actions: `login.failed`, `login.locked`, `ratelimit.hit` (Ethan's Q3 list).
+- Counters use one `INSERT ... ON CONFLICT DO UPDATE` on `rate_counters(key, window_start)`; old windows are pruned on write. The API limits use 1-minute windows.
+- **Open dependency (O3):** `src_ip` is `request.client.host`; `X-Forwarded-For` is not trusted. If the platform proxy puts everyone behind one address, the per-IP rows would throttle all users together. The per-IP limits are therefore generous, and the per-username limits carry the protection. Revisit when the support channel answers O3.
+
+**Q5 Maker-checker: `open`** (with Moses)
+
+- **Threshold:** a transfer needs a checker when `amount > 100000` cents (**KSh 1,000.00**), per transfer. The value is `approval_threshold_cents`; the app reads it from `ledger_settings` and the trigger uses the same number, so code and database cannot disagree.
+- **Flag for Moses:** your placeholder in `0002` is `10000000` (KSh 100,000). Adam caps a single transfer at `250000` (KSh 2,500), so with that value no transfer could ever need approval. `ledger_settings` is append-only, so the real value has to go into `0002` itself. Please change the placeholder to `100000` there (nothing is deployed from `0002` yet) and update `test_ledger_schema.py` to match.
+- **Splitting (T18):** the threshold is per transfer. Adam's velocity signals (5 transfers or KSh 5,000 in 10 minutes give a review) and the daily cap catch many transfers just under the threshold; there is no separate per-day approval threshold.
+- **Who approves:** `approver` only, and never the maker. In code a maker equal to the caller is a 403, action `approval.self_denied`; the database backs it with `CHECK (checker_id <> maker_id)` and the checker trigger. Wrong role: 403 `approval.denied`. A request the caller may not see: 404.
+- **Flow:** `pending_approval → posted | rejected | expired`; approval and posting are one transaction (Moses), with no separate "approved" state. The approve body is `{expected_amount}`; a different amount is 409 `approval.mismatch`. The checker's conditional `UPDATE` must change exactly one row, otherwise 409 (double approval, T23).
+- **Held reviews** (Adam's `held_review`) are released by the same rule: an `approver` other than the maker.
+- **Expiry:** 24 hours (`expires_at = created_at + 24 h`, already the default in `0002`). No job is needed: an expired request no longer holds funds and cannot be approved (409 `approval.denied`). The status becomes `expired` and `approval.expired` is logged the next time the request is read or touched.
+- **Funds and limits** are re-checked at posting, under the account lock, so a request that was valid yesterday can still fail today (`failed`, hold released).
+- **Reversals** use the same flow: a `teller` is the maker and a different `approver` is the checker.
+
 ## Adam: controls
 
 1. How do idempotency keys work: who sends them, what scope, how long kept, what happens on a repeat with a different body?
