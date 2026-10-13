@@ -12,3 +12,5 @@ __pycache__/
 docker-compose.yml
 requirements-dev.txt
 .env
+scripts/
+.github/

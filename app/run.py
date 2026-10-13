@@ -12,6 +12,17 @@ from app.observability import LOGGING, configure_logging
 
 log = logging.getLogger("app.startup")
 
+# Shared with tests/test_attack_ledger.py so the tests exercise the production settings.
+SERVER_OPTIONS = {
+    "log_config": LOGGING,
+    "access_log": False,      # the contract line from RequestLogMiddleware replaces it
+    "server_header": False,
+    "date_header": False,
+    # Trust no X-Forwarded-For / Forwarded header: src_ip is the direct peer and cannot be forged.
+    # Revisit once the organisers say what sits in front of us (DECISIONS Q6, question O3).
+    "proxy_headers": False,
+}
+
 
 def migrate() -> None:
     # The database may still be starting when the app boots; retry for up to ~60 s.
@@ -34,8 +45,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=config.PORT,
         workers=config.WORKERS,
-        log_config=LOGGING,
-        access_log=False,      # the contract line from RequestLogMiddleware replaces it
-        server_header=False,
-        date_header=False,
+        **SERVER_OPTIONS,
     )

@@ -5,8 +5,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import logging
+
+from app import observability as audit
 from app.db import get_db
-from app.observability import RequestLogMiddleware, configure_logging
+from app.observability import BodySizeLimit, RequestLogMiddleware, configure_logging
+from app.routes import ledger as ledger_routes
 
 configure_logging()
 
@@ -16,6 +20,7 @@ app = FastAPI(
     openapi_url="/openapi.json",
     docs_url=None,   # no Swagger / ReDoc UI shipped
     redoc_url=None,
+    redirect_slashes=False,  # a redirect would echo the attacker's Host header in Location
 )
 
 
@@ -29,6 +34,7 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+app.add_middleware(BodySizeLimit)
 # Added last, so it is outermost and logs every request, including ones other layers reject.
 app.add_middleware(RequestLogMiddleware)
 
@@ -43,6 +49,17 @@ async def validation_error(request: Request, exc: RequestValidationError):
 @app.exception_handler(StarletteHTTPException)
 async def http_error(request: Request, exc: StarletteHTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception):
+    # Never a stack trace, SQL or version in a response; the log gets the error type only.
+    logging.getLogger("app.error").error("app.error type=%s", type(exc).__name__)
+    audit.action("app.error")
+    return JSONResponse(status_code=500, content={"error": "internal_error"})
+
+
+app.include_router(ledger_routes.router)
 
 
 @app.get("/healthz", include_in_schema=False)

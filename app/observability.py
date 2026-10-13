@@ -89,6 +89,67 @@ class RequestLogMiddleware:
             }, separators=(",", ":")))
 
 
+MAX_BODY_BYTES = 16 * 1024  # largest legitimate request is a transfer: well under 1 KB
+
+
+class BodySizeLimit:
+    """Refuse request bodies over MAX_BODY_BYTES with 413 before any route reads them.
+
+    Checks Content-Length first, then counts the bytes actually received, so a missing or
+    lying Content-Length (chunked upload) cannot get a bigger body through.
+    """
+
+    def __init__(self, app, max_bytes: int = MAX_BODY_BYTES):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def _refuse(self, send):
+        action("input.rejected")
+        body = b'{"error":"payload_too_large"}'
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    too_big = int(value) > self.max_bytes
+                except ValueError:
+                    too_big = True
+                if too_big:
+                    await self._refuse(send)
+                    return
+
+        # Read the whole body up front (it is small by now) and replay it to the app.
+        chunks, size = [], 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            size += len(message.get("body", b""))
+            if size > self.max_bytes:
+                await self._refuse(send)
+                return
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        replayed = False
+
+        async def replay():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+
 class JsonFormatter(logging.Formatter):
     """Every non-contract log line is JSON too, so stdout stays one JSON object per line."""
 
