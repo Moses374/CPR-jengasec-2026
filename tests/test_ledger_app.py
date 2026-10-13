@@ -79,7 +79,8 @@ def make_customer(db, cents=0, status="active"):
 
 
 def make_checker(db):
-    user = _one(db, "INSERT INTO users (username) VALUES (:u) RETURNING id", u=f"c{uuid.uuid4().hex[:12]}")
+    user = _one(db, "INSERT INTO users (username, role) VALUES (:u, 'approver') RETURNING id",
+                u=f"c{uuid.uuid4().hex[:12]}")
     db.commit()
     return ledger.Actor(user_id=user, role="approver", src_ip="10.0.0.2")
 
@@ -295,7 +296,10 @@ def test_audit_chain_verifies_after_all_of_the_above(Session):
 # --------------------------------------------------------------- HTTP layer
 
 @pytest.fixture
-def api(Session):
+def api(Session, monkeypatch):
+    # login's rate limiter and the audit log open their own sessions through app.db.SessionLocal
+    monkeypatch.setattr("app.db.SessionLocal", Session)
+
     def db_override():
         s = Session()
         try:
@@ -310,11 +314,12 @@ def api(Session):
 
 
 def as_user(actor: ledger.Actor, role: str):
-    app.dependency_overrides[current_user] = lambda: CurrentUser(id=actor.user_id, role=role)
+    app.dependency_overrides[current_user] = lambda: CurrentUser(id=actor.user_id, username="test-user", role=role, session_id=uuid.uuid4(), src_ip="127.0.0.1")
 
 
-def test_routes_refuse_everyone_until_login_exists():
-    client = TestClient(app)
+@pytest.mark.db
+def test_routes_refuse_callers_without_a_valid_login(api):
+    client = api
     assert client.get("/api/v1/accounts").status_code == 401
     r = client.post("/api/v1/transfers", headers={"Idempotency-Key": "k" * 16},
                     json={"from_account_id": str(uuid.uuid4()), "to_account_id": str(uuid.uuid4()), "amount": "1.00"})
@@ -394,6 +399,7 @@ def test_chunked_body_without_content_length_is_still_limited():
     assert r.status_code == 413
 
 
-def test_small_bodies_pass_the_limit():
-    r = TestClient(app).post("/api/v1/transfers", json={"amount": "1.00"}, headers={"Idempotency-Key": "k" * 16})
+@pytest.mark.db
+def test_small_bodies_pass_the_limit(api):
+    r = api.post("/api/v1/transfers", json={"amount": "1.00"}, headers={"Idempotency-Key": "k" * 16})
     assert r.status_code == 401   # reached the route (and its auth), not stopped by the limit

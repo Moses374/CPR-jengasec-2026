@@ -93,6 +93,10 @@ class IdempotencyConflict(LedgerError):
     status, code, action = 409, "idempotency_conflict", "idempotency.conflict"
 
 
+class NotApprover(LedgerError):
+    status, code, action = 403, "forbidden", "authz.denied"
+
+
 class Busy(LedgerError):
     status, code, action = 503, "busy", "ledger.lock_timeout"
 
@@ -226,6 +230,7 @@ _RECORD_REFUSAL = {
     "limit.exceeded": lambda **kw: audit_log.record(action="limit.exceeded", **kw),
     "idempotency.conflict": lambda **kw: audit_log.record(action="idempotency.conflict", **kw),
     "approval.denied": lambda **kw: audit_log.record(action="approval.denied", **kw),
+    "authz.denied": lambda **kw: audit_log.record(action="authz.denied", **kw),
     "approval.mismatch": lambda **kw: audit_log.record(action="approval.mismatch", **kw),
     "approval.self_denied": lambda **kw: audit_log.record(action="approval.self_denied", **kw),
     "recon.started": lambda **kw: audit_log.record(action="recon.started", **kw),
@@ -261,6 +266,7 @@ def _record_denial(db: Session, actor: Actor, err: LedgerError, details: dict | 
 _SQLSTATE_TO_ERROR = {
     "LG004": InsufficientFunds,
     "LG006": TransferDenied,
+    "AC001": NotApprover,     # Kathy's trigger: the checker is not an active approver
     "LG005": ApprovalConflict,
     "55P03": Busy,    # lock_not_available (lock_timeout)
     "57014": Busy,    # query_canceled (statement_timeout)
