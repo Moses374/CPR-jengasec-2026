@@ -27,13 +27,22 @@ from fastapi import Header, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-from app import audit_log
+from app import audit_log, fraud, ledger
 from app.auth import CurrentUser, current_user
 from app.db import get_db, make_engine
 from app.main import app
 from app.run import SERVER_OPTIONS
 
 pytestmark = pytest.mark.db
+
+
+@pytest.fixture(autouse=True)
+def fraud_allows_unless_marked(request, monkeypatch):
+    """These tests are about locking, limits and approvals, not fraud: a burst of transfers from a
+    brand-new account would (rightly) be held or blocked by Adam's rules. Tests marked real_fraud
+    run the real assessment. Test-only: production has no switch for this."""
+    if "real_fraud" not in request.keywords:
+        monkeypatch.setattr(ledger, "_assess_fraud", lambda *a, **k: fraud.Assessment("allow", ()))
 
 THRESHOLD = 10_000_000  # ledger_settings.approval_threshold_cents (KES 100,000.00)
 TOKENS: dict[str, CurrentUser] = {}
@@ -202,6 +211,13 @@ ROUTES = [
     ("GET", f"/api/v1/transfers/{uuid.uuid4()}", None),
     ("POST", f"/api/v1/approvals/{uuid.uuid4()}/approve", {"expected_amount": "1.00"}),
     ("POST", f"/api/v1/approvals/{uuid.uuid4()}/reject", None),
+    ("GET", "/api/v1/approvals", None),
+    ("POST", f"/api/v1/transfers/{uuid.uuid4()}/reversals", {"reason": "customer request"}),
+    ("POST", f"/api/v1/reversals/{uuid.uuid4()}/approve", {"expected_amount": "1.00"}),
+    ("POST", f"/api/v1/reversals/{uuid.uuid4()}/reject", None),
+    ("POST", "/api/v1/reconciliation/runs", {"business_date": "2026-10-13"}),
+    ("GET", "/api/v1/reconciliation/runs", None),
+    ("GET", f"/api/v1/reconciliation/runs/{uuid.uuid4()}", None),
 ]
 
 
@@ -317,7 +333,6 @@ def test_a15_a_burst_of_150_requests_gets_no_server_errors(http, base_url, db):
 
 # ---------------------------------------------------------------- A2: replays (Adam #9, known gap)
 
-@pytest.mark.xfail(strict=True, reason="Adam #9: Idempotency-Key is validated but not enforced; a replay posts twice")
 def test_a2_a_replay_with_the_same_key_posts_once(http, db):
     alice, bob = make_person(db, 100_000), make_person(db)
     key = uuid.uuid4().hex
@@ -326,7 +341,6 @@ def test_a2_a_replay_with_the_same_key_posts_once(http, db):
     assert balance(db, alice.account) == 99_000
 
 
-@pytest.mark.xfail(strict=True, reason="Adam #9: the same key with a different body must be rejected")
 def test_a2_the_same_key_with_a_different_body_is_rejected(http, db):
     alice, bob = make_person(db, 100_000), make_person(db)
     key = uuid.uuid4().hex
@@ -334,7 +348,6 @@ def test_a2_the_same_key_with_a_different_body_is_rejected(http, db):
     assert transfer(http, alice, bob.account, "99.00", key=key).status_code in (409, 422)
 
 
-@pytest.mark.xfail(strict=True, reason="Adam #9: 40 parallel requests with one key must make one transfer")
 def test_a2_parallel_requests_with_one_key_make_one_transfer(http, base_url, db):
     alice, bob = make_person(db, 100_000), make_person(db)
     key = uuid.uuid4().hex

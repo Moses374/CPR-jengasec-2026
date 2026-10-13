@@ -12,12 +12,21 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-from app import audit_log, ledger
+from app import audit_log, fraud, ledger
 from app.auth import CurrentUser, current_user
 from app.db import get_db
 from app.main import app
 
 THRESHOLD = 10_000_000
+
+
+@pytest.fixture(autouse=True)
+def fraud_allows_unless_marked(request, monkeypatch):
+    """These tests are about locking, limits and approvals, not fraud: a burst of transfers from a
+    brand-new account would (rightly) be held or blocked by Adam's rules. Tests marked real_fraud
+    run the real assessment. Test-only: production has no switch for this."""
+    if "real_fraud" not in request.keywords:
+        monkeypatch.setattr(ledger, "_assess_fraud", lambda *a, **k: fraud.Assessment("allow", ()))
 
 
 # --------------------------------------------------------------- amounts (no database)
@@ -327,10 +336,14 @@ def test_http_transfer_flow(api, Session):
     [acct] = api.get("/api/v1/accounts").json()["items"]
     assert (acct["posted"], acct["available"]) == ("750.00", "750.00")
 
-    assert api.post("/api/v1/transfers", json={**body, "amount": "5000.00"}, headers=headers).json() == \
+    fresh = lambda: {"Idempotency-Key": uuid.uuid4().hex}  # noqa: E731
+    assert api.post("/api/v1/transfers", json={**body, "amount": "5000.00"}, headers=fresh()).json() == \
         {"error": "insufficient_funds"}
     swapped = {**body, "from_account_id": str(b), "to_account_id": str(a)}
-    assert api.post("/api/v1/transfers", json=swapped, headers=headers).status_code == 404   # not hers
+    assert api.post("/api/v1/transfers", json=swapped, headers=fresh()).status_code == 404   # not hers
+    # the first key, reused for a different body, is refused and moves nothing
+    assert api.post("/api/v1/transfers", json={**body, "amount": "1.00"}, headers=headers).status_code == 409
+    assert api.get("/api/v1/accounts").json()["items"][0]["posted"] == "750.00"
 
 
 @pytest.mark.db

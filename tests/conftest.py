@@ -7,6 +7,7 @@ Each session creates a fresh database, runs every migration on it, and drops it 
 Without a reachable database the db tests are skipped locally, but fail when REQUIRE_DB=1 (CI).
 """
 
+import contextlib
 import os
 import uuid
 from pathlib import Path
@@ -23,10 +24,12 @@ SERVER_URL = os.environ.get("TEST_DATABASE_URL", "postgresql+psycopg://payments:
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "db: needs a real PostgreSQL (docker compose up -d db)")
+    config.addinivalue_line("markers", "real_fraud: run Adam's real fraud assessment (default: allow)")
 
 
-@pytest.fixture(scope="session")
-def db_url():
+@contextlib.contextmanager
+def _migrated_database():
+    """A brand-new database with every migration applied; dropped afterwards."""
     server = create_engine(SERVER_URL, isolation_level="AUTOCOMMIT")
     try:
         with server.connect():
@@ -53,12 +56,25 @@ def db_url():
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = previous
+    try:
+        yield url
+    finally:
+        with server.connect() as c:
+            c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        server.dispose()
 
-    yield url
 
-    with server.connect() as c:
-        c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-    server.dispose()
+@pytest.fixture(scope="session")
+def db_url():
+    with _migrated_database() as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
+def fresh_db_url():
+    """A clean database for one test module (e.g. reconciliation, which must start from a clean ledger)."""
+    with _migrated_database() as url:
+        yield url
 
 
 @pytest.fixture(scope="session")
