@@ -236,7 +236,7 @@ def test_requests_cannot_be_deleted(conn, world):
     open_request(conn, world["maker"], world["src"], world["dst"], 10_000)
     conn.commit()
     expect("LG002", conn, lambda: conn.execute(text("DELETE FROM transfer_requests")))
-    expect("LG002", conn, lambda: conn.execute(text("TRUNCATE transfer_requests")))
+    expect("LG002", conn, lambda: conn.execute(text("TRUNCATE transfer_requests CASCADE")))
 
 
 def approve(conn, req, checker, src, dst, amount):

@@ -4,13 +4,13 @@ from app.recon import LedgerEntry, ReconciliationSnapshot, reconcile
 
 def _assess(
     *,
-    amount=1_000,
+    amount=100_000,
     typical=None,
     count=0,
     recent_total=0,
     known_payee=True,
     account_age=1_000,
-    balance=1_000_000,
+    balance=100_000_000,
 ):
     return assess(
         TransferRisk(amount_cents=amount),
@@ -31,16 +31,16 @@ def test_fraud_allows_transfer_without_signals():
 
 def test_fraud_reviews_each_ambiguous_signal():
     assert _assess(count=5).reasons == ("velocity_count_10m",)
-    assert _assess(amount=1_000, recent_total=499_000).reasons == ("velocity_amount_10m",)
-    assert _assess(amount=50_000, typical=10_000).reasons == ("amount_vs_typical",)
-    assert _assess(amount=100_000, known_payee=False).reasons == ("new_payee_amount",)
-    assert _assess(amount=50_000, account_age=23).reasons == ("new_account_amount",)
-    assert _assess(amount=100_000, balance=110_000).reasons == ("rapid_drain",)
-    assert _assess(amount=100_000, balance=2_000_000).decision == "allow"
+    assert _assess(amount=100_000, recent_total=49_900_000).reasons == ("velocity_amount_10m",)
+    assert _assess(amount=5_000_000, typical=1_000_000).reasons == ("amount_vs_typical",)
+    assert _assess(amount=10_000_000, known_payee=False).reasons == ("new_payee_amount",)
+    assert _assess(amount=5_000_000, account_age=23).reasons == ("new_account_amount",)
+    assert _assess(amount=10_000_000, balance=11_000_000).reasons == ("rapid_drain",)
+    assert _assess(amount=10_000_000, balance=200_000_000).decision == "allow"
 
 
 def test_extreme_velocity_blocks_before_other_review_signals():
-    assert _assess(count=10, amount=100_000, known_payee=False).decision == "block"
+    assert _assess(count=10, amount=10_000_000, known_payee=False).decision == "block"
     assert _assess(count=10).reasons == ("velocity_block_10m",)
 
 

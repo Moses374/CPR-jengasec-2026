@@ -37,9 +37,27 @@ def migrate() -> None:
     raise SystemExit("database unavailable, giving up")
 
 
+def check_controls() -> None:
+    """Startup check (DECISIONS Q1): every ledger and audit-log trigger exists and is enabled.
+    A problem is logged loudly and recorded, but never stops the app: refusing to start is an outage too."""
+    from app import audit_log, recon
+    from app.db import SessionLocal
+
+    try:
+        with SessionLocal() as session:
+            problems = recon.check_ledger_controls(session) + audit_log.check_controls(session)
+    except Exception as e:
+        log.error("controls check failed: %s", type(e).__name__)
+        return
+    if problems:
+        log.critical("ledger.controls_disabled problems=%s", "; ".join(problems))
+        audit_log.record(action="ledger.controls_disabled", outcome="error", details={"checks": problems})
+
+
 if __name__ == "__main__":
     configure_logging()
     migrate()
+    check_controls()
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

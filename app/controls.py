@@ -2,14 +2,20 @@
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+# One definition of a valid key, used by the route and here (letters, digits, - and _; UUIDs fit).
+IDEMPOTENCY_KEY_RE = r"^[A-Za-z0-9_-]{8,64}$"
+_IDEMPOTENCY_KEY = re.compile(IDEMPOTENCY_KEY_RE)
 MAX_IDEMPOTENCY_KEY_LENGTH = 64
-MIN_TRANSFER_CENTS = 100
-MAX_TRANSFER_CENTS = 250_000
-MAX_DAILY_OUTGOING_CENTS = 1_000_000
-IDEMPOTENCY_RETENTION_HOURS = 24
+
+# Bank scale, agreed 13 Oct: min < approval threshold (KSh 100,000) < per transfer <= per day.
+# The database enforces the same values (ledger_settings, migration 0004).
+MIN_TRANSFER_CENTS = 100                  # KSh 1.00
+MAX_TRANSFER_CENTS = 25_000_000           # KSh 250,000
+MAX_DAILY_OUTGOING_CENTS = 100_000_000    # KSh 1,000,000 per account per UTC day
 
 
 class LimitExceeded(ValueError):
@@ -21,11 +27,9 @@ class LimitExceeded(ValueError):
 
 
 def validate_idempotency_key(key: str) -> str:
-    """Return a usable key or reject empty, oversized, or non-visible values."""
-    if not key or len(key) > MAX_IDEMPOTENCY_KEY_LENGTH:
-        raise ValueError("Idempotency-Key must contain 1 to 64 visible ASCII characters")
-    if any(ord(character) < 0x21 or ord(character) > 0x7E for character in key):
-        raise ValueError("Idempotency-Key must contain only visible ASCII characters")
+    """Return the key if it matches IDEMPOTENCY_KEY_RE (8-64 of A-Z a-z 0-9 - _), else raise."""
+    if not isinstance(key, str) or not _IDEMPOTENCY_KEY.fullmatch(key):
+        raise ValueError("Idempotency-Key must be 8 to 64 letters, digits, '-' or '_'")
     return key
 
 

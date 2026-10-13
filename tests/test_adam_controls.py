@@ -18,24 +18,24 @@ def test_idempotency_fingerprint_is_independent_of_object_key_order():
     assert request_fingerprint({"amount": 120}) != request_fingerprint({"amount": 121})
 
 
-@pytest.mark.parametrize("key", ["", "has space", "line\nbreak", "x" * 65, "é"])
+@pytest.mark.parametrize("key", ["", "short", "has space", "line\nbreak", "x" * 65, "é", "semi;colon", 'quote"key1'])
 def test_idempotency_key_rejects_invalid_values(key):
     with pytest.raises(ValueError):
         validate_idempotency_key(key)
 
 
-def test_idempotency_key_accepts_visible_ascii():
+def test_idempotency_key_accepts_the_route_format():
     assert validate_idempotency_key("req_ABC-123") == "req_ABC-123"
     assert len(validate_idempotency_key("x" * 64)) == 64
     assert idempotency_key_hash("req_ABC-123") != "req_ABC-123"
 
 
 def test_transfer_limits_accept_boundary_and_enforce_daily_total():
-    check_transfer_limits(250_000, 750_000)
+    check_transfer_limits(25_000_000, 75_000_000)
     with pytest.raises(LimitExceeded, match="per_transfer_limit"):
-        check_transfer_limits(250_001, 0)
+        check_transfer_limits(25_000_001, 0)
     with pytest.raises(LimitExceeded, match="daily_limit"):
-        check_transfer_limits(100, 1_000_000)
+        check_transfer_limits(100, 100_000_000)
     with pytest.raises(LimitExceeded, match="amount_invalid"):
         check_transfer_limits(0, 0)
     with pytest.raises(LimitExceeded, match="amount_invalid"):
