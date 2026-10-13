@@ -93,7 +93,9 @@ docker buildx build --platform linux/amd64 -t ghcr.io/<owner>/cpr-jengasec-2026:
 
 ### Open questions for the organisers
 
-- Exact environment variable names for the PostgreSQL connection (`app/config.py` accepts `DATABASE_URL` or `PG*`).
+- ~~Exact environment variable names for the PostgreSQL connection~~ Answered by the Image Submission Guide: both `DATABASE_URL` and `PG*` (see DECISIONS Q6).
+- Is the platform database user a superuser? (Probably; confirm from the first deployment.)
+- Is stdout kept outside our container, and which client address do we see behind the proxy?
 - Does the database count toward our 3 GB?
 - Which of Blue Team Documentation, Report and Supporting Evidence are required, and can a filing be replaced?
 - Do Red teams or judges get credentials from us? If yes, customer accounts only: which ones?
