@@ -44,12 +44,12 @@ def test_openapi_served_without_ui(client):
 
 
 def test_every_request_writes_one_contract_line(client, contract_lines):
-    client.post("/api/v1/transfers?token=secret", json={"amount": 1})
+    client.post("/api/v1/no-such-route?token=secret", json={"amount": 1})
     lines = contract_lines()
     assert len(lines) == 1
     line = lines[0]
     assert set(line) == {"ts", "src_ip", "method", "path", "status", "user", "action"}
-    assert line["path"] == "/api/v1/transfers"  # query string never logged
+    assert line["path"] == "/api/v1/no-such-route"  # query string never logged
     assert line["status"] == 404
     assert line["action"] == "http.not_found"
 
