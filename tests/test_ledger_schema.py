@@ -144,6 +144,18 @@ def test_seed_is_balanced_and_users_have_real_hashes(conn):
     assert one(conn, "SELECT status FROM accounts a JOIN users u ON u.id = a.owner_id WHERE u.username = 'esther.njeri'") == "frozen"
 
 
+def test_seed_history_is_posted_in_the_past_and_audited(conn):
+    """Migration 0007: 28 backdated transfers, each with exactly one audit row (reconciliation needs it)."""
+    rows = conn.execute(text(
+        "SELECT r.id, r.created_at < date_trunc('day', now()) AS past, "
+        "(SELECT count(*) FROM audit_log a WHERE a.object_id = r.id::text AND a.action = 'transfer.created') AS audits "
+        "FROM transfer_requests r JOIN users u ON u.id = r.maker_id "
+        "WHERE u.username IN ('amina.wekesa', 'brian.otieno', 'cynthia.mwangi')")).all()
+    assert len(rows) == 28
+    assert all(r.past for r in rows) and all(r.audits == 1 for r in rows)
+    assert one(conn, "SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%server_time' AND tgenabled <> 'O'") == 0
+
+
 def test_opening_cannot_debit_a_customer(conn, world):
     def go():
         txn = new_txn(conn, "opening")

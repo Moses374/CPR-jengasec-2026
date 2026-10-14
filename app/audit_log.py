@@ -211,6 +211,13 @@ def _optional(value: Any, limit: int) -> str | None:
 # ---------------------------------------------------------------------------------------------
 # Writing
 # ---------------------------------------------------------------------------------------------
+def _check_call(action: str, outcome: str) -> None:
+    if not _ACTION_RE.fullmatch(action or "") or len(action) > 64:
+        raise AuditError(f"bad audit action {action!r}")
+    if outcome not in OUTCOMES:
+        raise AuditError(f"bad audit outcome {outcome!r}")
+
+
 def append(
     db: Executor,
     *,
@@ -224,10 +231,7 @@ def append(
     details: dict | None = None,
 ) -> AuditRow:
     """Add one row inside the caller's transaction. Does not commit. Raises if it cannot write."""
-    if not _ACTION_RE.fullmatch(action or "") or len(action) > 64:
-        raise AuditError(f"bad audit action {action!r}")
-    if outcome not in OUTCOMES:
-        raise AuditError(f"bad audit outcome {outcome!r}")
+    _check_call(action, outcome)
 
     # One writer at a time, until this transaction ends. The caller calls us last, so the lock
     # is held only for the commit. The chain trigger takes the same lock (re-entrant for us).
@@ -280,8 +284,12 @@ def record(*, session_factory: Callable[[], Session] | None = None, **kwargs: An
     already holds the action, so the denial is still on record.
     """
     action = kwargs.get("action", "")
+    _check_call(action, kwargs.get("outcome", ""))  # a bad call is a bug: refuse it before touching the database
     try:
         with (session_factory or _default_factory())() as session:
+            # Fail fast instead of waiting forever if this request's own transaction already holds the
+            # chain lock (append() not yet committed): Postgres cannot see that wait as a deadlock.
+            session.execute(text("SET LOCAL lock_timeout = '2s'"))
             row = append(session, **kwargs)
             session.commit()
             return row.seq

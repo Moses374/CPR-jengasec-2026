@@ -1,6 +1,7 @@
 """Container entrypoint: migrate the database once, then start the web server."""
 
 import logging
+import os
 import time
 
 import uvicorn
@@ -54,9 +55,23 @@ def check_controls() -> None:
         audit_log.record(action="ledger.controls_disabled", outcome="error", details={"checks": problems})
 
 
+def drop_privileges() -> None:
+    """Migrations ran as the platform's user; the web workers connect as the restricted ledger_app role.
+    The workers inherit this process's environment, so DATABASE_URL is replaced before they start,
+    and the platform user's password is removed from it."""
+    from app import db_roles
+
+    runtime_url = db_roles.setup(config.database_url())
+    if runtime_url is None:
+        return  # logged by setup(): the app keeps running as the platform user
+    os.environ["DATABASE_URL"] = runtime_url
+    os.environ.pop("PGPASSWORD", None)
+
+
 if __name__ == "__main__":
     configure_logging()
     migrate()
+    drop_privileges()
     check_controls()
     uvicorn.run(
         "app.main:app",

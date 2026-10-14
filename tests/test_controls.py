@@ -250,6 +250,22 @@ def test_a_burst_of_transfers_is_reviewed_then_blocked(Session):
         assert set(outcomes[5:10]) == {"held_review"} and outcomes[10:] == ["blocked", "blocked"]
 
 
+@pytest.mark.real_fraud
+def test_seed_history_gives_fraud_a_baseline(Session):
+    """Amina usually pays Brian about KSh 12,000 (migration 0007); KSh 60,000 is 5x that, so it is held."""
+    with Session() as db:
+        amina = db.execute(text("SELECT id FROM users WHERE username = 'amina.wekesa'")).scalar_one()
+        src, dst = (db.execute(text(
+            "SELECT a.id FROM accounts a JOIN users u ON u.id = a.owner_id WHERE u.username = :u AND a.name = 'Current'"),
+            {"u": u}).scalar_one() for u in ("amina.wekesa", "brian.otieno"))
+        actor = ledger.Actor(user_id=amina, role="customer")
+        normal = ledger.create_transfer(db, actor, from_account_id=src, to_account_id=dst, amount_cents=11_000 * KSH)
+        unusual = ledger.create_transfer(db, actor, from_account_id=src, to_account_id=dst, amount_cents=60_000 * KSH)
+        assert (normal.status, unusual.status) == ("posted", "held_review")
+        reasons = db.execute(text("SELECT fraud_reasons FROM transfer_requests WHERE id = :r"), {"r": unusual.id}).scalar_one()
+        assert "amount_vs_typical" in reasons
+
+
 def test_held_review_is_released_or_blocked_only_by_another_person(Session):
     with Session() as db:
         alice, a = person(db, 10_000 * KSH)

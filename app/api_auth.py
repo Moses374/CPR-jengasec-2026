@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app import audit_log, auth, ratelimit
@@ -83,10 +84,16 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)) -
         raise _invalid_credentials()
 
     if auth.needs_rehash(user.password_hash):
-        db.execute(
-            text("UPDATE users SET password_hash = :h WHERE id = :id"),
-            {"h": auth.hash_password(body.password), "id": user.id},
-        )
+        # Best effort: the runtime database role may not update password hashes (app/db_roles.py). A savepoint
+        # keeps a refusal from aborting the login; the old hash still verifies.
+        try:
+            with db.begin_nested():
+                db.execute(
+                    text("UPDATE users SET password_hash = :h WHERE id = :id"),
+                    {"h": auth.hash_password(body.password), "id": user.id},
+                )
+        except DBAPIError:
+            pass
 
     # At most MAX_ACTIVE_SESSIONS live sessions per user: revoke the oldest beyond the limit.
     db.execute(

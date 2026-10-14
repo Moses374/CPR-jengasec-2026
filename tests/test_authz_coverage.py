@@ -22,14 +22,33 @@ def _depends_on_current_user(dependant) -> bool:
     return False
 
 
+def _routes(routes):
+    """Every route, including those inside included routers. FastAPI 0.140+ no longer flattens
+    include_router() into app.routes; it wraps each router (original_router), so walk into it."""
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            yield from _routes(inner.routes)
+        else:
+            yield route
+
+
 def _operations():
-    for route in app.routes:
+    for route in _routes(app.routes):
         methods = getattr(route, "methods", None)
         dependant = getattr(route, "dependant", None)
         if methods is None or dependant is None:
             continue
         for method in sorted(methods - {"HEAD", "OPTIONS"}):
             yield method, route.path, dependant
+
+
+def test_every_published_operation_is_checked():
+    """Guard for the test itself: if a framework change hides routes from _operations(), fail here
+    instead of silently checking fewer routes (this happened once, on the FastAPI 0.140 upgrade)."""
+    published = {(m.upper(), path) for path, item in app.openapi()["paths"].items() for m in item}
+    walked = {(m, path) for m, path, _ in _operations()}
+    assert published <= walked, f"routes not checked for an auth dependency: {sorted(published - walked)}"
 
 
 def test_openapi_route_is_listed_even_though_it_has_no_dependant():
