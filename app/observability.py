@@ -182,6 +182,9 @@ LOGGING = {
         "uvicorn.error": {"handlers": ["app"], "level": "INFO", "propagate": False},
         "uvicorn.access": {"handlers": [], "level": "WARNING", "propagate": False},
         "alembic": {"handlers": ["app"], "level": "INFO", "propagate": False},
+        # Our own operational lines (db.least_privilege=on, auditlog.anchor, recon results) are INFO and
+        # must reach the platform logs; without this they fell under root's WARNING and were dropped.
+        "app": {"level": "INFO"},   # no handler of its own: propagates to root's handler (no duplicates)
     },
     "root": {"handlers": ["app"], "level": "WARNING"},
 }
