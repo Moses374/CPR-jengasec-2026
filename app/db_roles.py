@@ -25,21 +25,27 @@ log = logging.getLogger("app.startup")
 ROLE = "ledger_app"
 
 # What the app does, from an inventory of every statement in app/ (13 Oct). Anything not listed is refused.
-SELECT_ONLY = ("ledger_settings", "app_metadata")
-SELECT_INSERT = ("accounts", "audit_log", "entries", "idempotency_keys", "ledger_transactions", "login_attempts",
-                 "rate_counters", "recon_runs", "reversal_requests", "sessions", "transfer_requests", "users")
+# users and accounts are read-only at runtime: the app never creates them (they come from the seed), and an
+# INSERT grant would let injected SQL create an admin with a known password.
+SELECT_ONLY = ("ledger_settings", "app_metadata", "users", "accounts")
+SELECT_INSERT = ("audit_log", "entries", "idempotency_keys", "ledger_transactions", "login_attempts",
+                 "rate_counters", "recon_runs", "reversal_requests", "sessions", "transfer_requests")
 UPDATE_COLUMNS = {
     "transfer_requests": "status, checker_id, ledger_transaction_id, failure_reason",
     "reversal_requests": "status, checker_id, ledger_transaction_id, failure_reason",
     "idempotency_keys": "response",
     "sessions": "revoked_at",
-    "users": "password_hash",          # Kathy: rehash on login when the hash parameters change
     "rate_counters": "hits",
     # SELECT ... FOR NO KEY UPDATE (how accounts are locked) needs UPDATE on at least one column.
     # `name` is the harmless one: granting `status` would let injected SQL unfreeze a frozen account.
     "accounts": "name",
 }
 DELETE_ALLOWED = ("sessions", "rate_counters", "login_attempts")   # housekeeping of expired rows only
+
+# Deliberately NOT granted: UPDATE on users.password_hash. Injected SQL could otherwise set an admin's hash to a
+# known one and log in as them. The only use was re-hashing after a change of argon2 settings, which is now
+# best-effort (app/api_auth.py). Known limit: INSERT on sessions is needed for login, so injected SQL could
+# mint a session; closing that needs session creation inside a database function (follow-up).
 
 # Every statement is a constant: table and column names come from the lists above, never from input.
 _GRANTS = (

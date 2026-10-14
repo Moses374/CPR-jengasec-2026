@@ -85,6 +85,9 @@ def test_runtime_role_is_not_a_superuser_and_owns_nothing(app_engine):
     "UPDATE accounts SET status = 'active'",                              # unfreeze a frozen account
     "UPDATE accounts SET min_balance = -1000000",
     "UPDATE users SET role = 'admin'",                                    # promote yourself
+    "UPDATE users SET password_hash = 'known'",                           # take over an admin's login
+    "INSERT INTO users (username, role, password_hash) VALUES ('evil.admin', 'admin', 'x')",   # new admin
+    "INSERT INTO accounts (owner_id, kind, name) VALUES (NULL, 'system', 'stash')",
     "DELETE FROM transfer_requests",
     "INSERT INTO ledger_settings (key, value) VALUES ('approval_threshold_cents_x', 1)",
     "CREATE TABLE stash (x int)",
@@ -169,3 +172,37 @@ def test_setup_falls_back_when_the_user_cannot_create_roles(runtime_url, caplog)
     with caplog.at_level("WARNING", logger="app.startup"):
         assert db_roles.setup(runtime_url) is None
     assert "db.least_privilege=unavailable" in caplog.text
+
+
+def test_login_works_when_a_rehash_is_refused(owner, app_engine, monkeypatch):
+    """An old-parameter hash wants a rehash; ledger_app may not write password hashes. Login must still work."""
+    from argon2 import PasswordHasher
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.main import app
+
+    old_hash = PasswordHasher(time_cost=1, memory_cost=8192, parallelism=1).hash("old settings password")
+    with owner.connect() as c:
+        name = f"r{uuid.uuid4().hex[:12]}"
+        c.execute(text("INSERT INTO users (username, role, password_hash) VALUES (:u, 'customer', :h)"),
+                  {"u": name, "h": old_hash})
+        c.commit()
+    Session = sessionmaker(bind=app_engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr("app.db.SessionLocal", Session)
+
+    def db_override():
+        s = Session()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app.dependency_overrides[get_db] = db_override
+    try:
+        r = TestClient(app).post("/api/v1/auth/login", json={"username": name, "password": "old settings password"})
+        assert r.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+    with owner.connect() as c:   # the hash was left as it was: the runtime role could not change it
+        assert c.execute(text("SELECT password_hash FROM users WHERE username = :u"), {"u": name}).scalar_one() == old_hash
